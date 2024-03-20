@@ -22,7 +22,8 @@ cd "${PBS_O_WORKDIR}" || exit
 HERE=$(python3 -c 'import os; print(os.getcwd())')
 export HERE
 # ---- 1. Assert `./pretrain_gpt_alcf.py` exists: -----------------------------
-export EXEC="${HERE}/pretrain_gpt_alcf.py"
+# export EXEC="${HERE}/pretrain_gpt_alcf.py"
+export EXEC="${HERE}/dpo_gpt_alcf.py"
 [ -f "${EXEC}" ] || exit
 # ---- 2. `source ./ALCF/helpers_alcf.sh`: ------------------------------------
 sourceFile "${HERE}/ALCF/helpers.sh" || exit
