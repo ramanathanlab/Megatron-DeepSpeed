@@ -426,7 +426,7 @@ def calculate_mos_loss(
 def calculate_dpo_loss(
         args,
         stu_output,
-        ref_model,
+        teacher_model,
         tokens,
         position_ids,
         attention_mask
@@ -438,7 +438,7 @@ def calculate_dpo_loss(
     kd_temp = 1.0
     beta = 0.1
 
-    if ref_model:
+    if teacher_model:
         with torch.no_grad():
             if (
                         args.curriculum_learning_legacy and
@@ -454,7 +454,7 @@ def calculate_dpo_loss(
                 )
                 # No need to truncate labels
                 # as we do not need it for the teacher logits
-            ref_output, ref_other_losses = ref_model(
+            ref_output, ref_other_losses = teacher_model(
                 tokens,
                 position_ids,
                 attention_mask
@@ -576,11 +576,11 @@ def forward_step(data_iterator, model):
             )
 
     dpo_loss = 0
-    if args.ref_model is not None:
+    if args.teacher_model is not None:
         dpo_loss = calculate_dpo_loss(
             args,
             stu_output,
-            args.ref_model[0],
+            args.teacher_model[0],
             tokens,
             position_ids,
             attention_mask
@@ -613,7 +613,8 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
     else:
         files = args.data_path
     print_rank_0(f"file list {files}")
-    train_ds_p, valid_ds_p, test_ds_p = build_train_valid_test_datasets(
+
+    train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
         data_prefix=files,
         data_impl=args.data_impl,
         splits_string=args.split,
@@ -628,20 +629,37 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
         data_cache_path=args.data_cache_path)
     print_rank_0("> finished creating GPT datasets ...")
 
-    train_ds_u, valid_ds_u, test_ds_u = build_train_valid_test_datasets(
-        data_prefix=files,
-        data_impl=args.data_impl,
-        splits_string=args.split,
-        train_valid_test_num_samples=train_val_test_num_samples,
-        seq_length=args.seq_length,
-        seed=args.seed,
-        skip_warmup=True,
-        # skip_warmup=(not args.mmap_warmup),
-        train_data_prefix=args.train_data_path,
-        valid_data_prefix=args.valid_data_path,
-        test_data_prefix=args.test_data_path,
-        data_cache_path=args.data_cache_path)
-    print_rank_0("> finished creating GPT datasets ...")
+    # #------------ Preferred -------------- 
+    # train_ds_p, valid_ds_p, test_ds_p = build_train_valid_test_datasets(
+    #     data_prefix=files,
+    #     data_impl=args.data_impl,
+    #     splits_string=args.split,
+    #     train_valid_test_num_samples=train_val_test_num_samples,
+    #     seq_length=args.seq_length,
+    #     seed=args.seed,
+    #     skip_warmup=True,
+    #     # skip_warmup=(not args.mmap_warmup),
+    #     train_data_prefix=args.train_data_path,
+    #     valid_data_prefix=args.valid_data_path,
+    #     test_data_prefix=args.test_data_path,
+    #     data_cache_path=args.data_cache_path)
+    # print_rank_0("> finished creating GPT datasets ...")
+
+    # #------------ Unpreferred -------------- 
+    # train_ds_u, valid_ds_u, test_ds_u = build_train_valid_test_datasets(
+    #     data_prefix=files,
+    #     data_impl=args.data_impl,
+    #     splits_string=args.split,
+    #     train_valid_test_num_samples=train_val_test_num_samples,
+    #     seq_length=args.seq_length,
+    #     seed=args.seed,
+    #     skip_warmup=True,
+    #     # skip_warmup=(not args.mmap_warmup),
+    #     train_data_prefix=args.train_data_path,
+    #     valid_data_prefix=args.valid_data_path,
+    #     test_data_prefix=args.test_data_path,
+    #     data_cache_path=args.data_cache_path)
+    # print_rank_0("> finished creating GPT datasets ...")
 
     # Create a new Dataiterator with __getitem__() overwritten to give a tuple of [u,p] in train_ds
 
