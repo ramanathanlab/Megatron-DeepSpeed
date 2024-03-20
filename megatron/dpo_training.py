@@ -209,7 +209,8 @@ def pretrain(train_valid_test_dataset_provider,
     if args.mos or args.kd: # Set up teacher model
         args.teacher_model = setup_teacher_model(args, model_provider)
 
-    args.ref_model, _, _ = load_model_weights_only(model_provider)
+    # ToDo
+    args.teacher_model, _, _ = load_model_weights_only(model_provider)
 
     # Print setup timing.
     print_rank_0('done with setup ...')
