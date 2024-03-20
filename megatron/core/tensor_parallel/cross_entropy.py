@@ -63,6 +63,7 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
 
         # Loss = log(sum(exp(logits))) - predicted-logit.
         loss = torch.log(sum_exp_logits) - predicted_logits
+        print(f'Loss before smoothing from vocabparallelcrossentropy: {loss}')
 
         # Normalize and optionally smooth logits
         exp_logits.div_(sum_exp_logits.unsqueeze(dim=-1))
@@ -85,11 +86,14 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
             log_probs = torch.log(exp_logits)
             mean_log_probs = log_probs.mean(dim=-1)
             loss = (1.0 - smoothing) * loss - smoothing * mean_log_probs
+            print(f'Loss after smoothing: {loss}')
 
         ctx.label_smoothing, ctx.vocab_size = label_smoothing, vocab_size
 
         # Store softmax, target-mask and masked-target for backward pass.
         ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
+
+        print(f'Final loss from vocabparallelcrossentropy: {loss}')
 
         return loss
 
