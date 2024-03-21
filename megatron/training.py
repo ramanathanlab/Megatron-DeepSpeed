@@ -488,6 +488,7 @@ def load_model_weights_only(model_provider_func):
     lr_scheduler = None
 
     if args.deepspeed:
+        print(f'On args.deepspeed branch in load_model_weights_only..')
         # When loading just the model weights, ZeRO can be disabled.
         if 'zero_optimization' in args.deepspeed_config_dict:
             del args.deepspeed_config_dict['zero_optimization']
@@ -504,6 +505,46 @@ def load_model_weights_only(model_provider_func):
 
     print_datetime('before load checkpoint')
     if args.load is not None:
+        print(f'On args.load is not None branch in load_model_weights_only..')
+        iteration = load_checkpoint(model, optimizer, lr_scheduler, strict=True, load_only_weights=True)
+
+    print_datetime('after load checkpoint weights')
+
+    return model, optimizer, lr_scheduler
+
+def load_model_weights_only_modified(model_provider_func):
+    """Setup model and optimizer."""
+    args = get_args()
+    print_rank_0('***>>>>> Args:{}'.format(args))
+
+    model = get_model(model_provider_func)
+
+    optimizer = None
+    lr_scheduler = None
+
+    if args.deepspeed:
+        print(f'On args.deepspeed branch in load_model_weights_only..')
+        # When loading just the model weights, ZeRO can be disabled.
+        if 'zero_optimization' in args.deepspeed_config_dict:
+            del args.deepspeed_config_dict['zero_optimization']
+
+        model, optimizer, _, lr_scheduler = deepspeed.initialize(
+            model=model[0],
+            # optimizer=optimizer,
+            args=args,
+            # lr_scheduler=lr_scheduler,
+            mpu=mpu if args.no_pipeline_parallel else None,
+            config=args.deepspeed_config_dict,
+        )
+
+        assert not isinstance(model, deepspeed.PipelineEngine), \
+            'Weight loading only mode is not supported in pipeline parallelism yet.'
+
+        model = [model]
+
+    print_datetime('before load checkpoint')
+    if args.load is not None:
+        print(f'On args.load is not None branch in load_model_weights_only..')
         iteration = load_checkpoint(model, optimizer, lr_scheduler, strict=True, load_only_weights=True)
 
     print_datetime('after load checkpoint weights')
@@ -526,7 +567,9 @@ def setup_model_and_optimizer(model_provider_func,
 
     # initialize the compression here
     student_global_steps = 0
+    print(f'Setting up model and optimizer..')
     if args.kd or args.mos:
+        print(f'On args.kd or args.mos branch..')
         model, _, _, _ = deepspeed.initialize(
                 model=model[0],
                 args=args,
@@ -542,6 +585,7 @@ def setup_model_and_optimizer(model_provider_func,
         print_rank_0('***>>>>> Student model, global step:{}'.format(student_global_steps))
 
     if args.compression_training:
+        print(f'On args.compression_training branch..')
         model, _, _, _ = deepspeed.initialize(
             model=model[0],
             args=args,
@@ -555,6 +599,7 @@ def setup_model_and_optimizer(model_provider_func,
                                    (torchDDP, LocalDDP, Float16Module))
 
     if args.inference:
+        print(f'On args.inference branch..')
         optimizer = None
         opt_param_scheduler = None
     else:
@@ -605,6 +650,7 @@ def setup_model_and_optimizer(model_provider_func,
             )
             model.set_data_post_process_func(data_post_process)
         else:
+            print(f'On deepspeed initialize branch without curriculum learning..')
             model, optimizer, _, opt_param_scheduler = deepspeed.initialize(
                 model=model[0],
                 optimizer=optimizer,
@@ -625,13 +671,16 @@ def setup_model_and_optimizer(model_provider_func,
     # Compression has its own checkpoint loading path (e.g, loading both teacher and student models). So if compression is enabled, we skip the following checkpoint loading.
     no_post_init_checkpoint_loading = args.kd or args.mos
     if not no_post_init_checkpoint_loading:
+        print(f'On not no_post_init_checkpoint_loading branch..')
         if args.load is not None:
+            print(f'On not no_post_init_checkpoint_loading branch and args.load is not None..')
             timers = get_timers()
             timers('load-checkpoint', log_level=0).start(barrier=True)
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
         else:
+            print(f'On not no_post_init_checkpoint_loading branch and args.load is None..')
             args.iteration = 0
     else:
         model[0].global_steps = student_global_steps
@@ -650,6 +699,7 @@ def setup_model_and_optimizer(model_provider_func,
 
     # random-LTD requires converting transformer layers
     if args.random_ltd:
+        print(f'On args.random_ltd branch..')
         model[0] = convert_to_random_ltd(model[0], ParallelTransformerLayer)
 
     return model, optimizer, opt_param_scheduler
