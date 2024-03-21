@@ -340,6 +340,47 @@ def loss_func(loss_mask, moe_loss, mos_loss, output_tensor):
         loss = loss + moe_loss
         return loss, {'lm loss': averaged_loss[0], 'moe loss': moe_loss}
 
+def dpo_loss_func(loss_mask, dpo_loss, output_tensor):
+    args = get_args()
+    losses = output_tensor.float()
+    loss_mask = loss_mask.view(-1).float()
+    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+
+    # Reduce loss for logging.
+    averaged_loss = average_losses_across_data_parallel_group([loss])
+    if args.mos or args.kd:
+        # assert max(args.num_experts) >= 1
+        loss = loss + moe_loss + mos_loss
+        if args.mos:
+            return loss, {
+                'total loss': loss,
+                'lm loss': averaged_loss[0],
+                'moe loss': moe_loss,
+                'mos loss': mos_loss
+            }
+        elif args.kd:
+            return loss, {
+                'total loss': loss,
+                'lm loss': averaged_loss[0],
+                'moe loss': moe_loss,
+                'kd loss': mos_loss
+            }
+        print_rank_0(
+            f'>>> total loss: {loss}, '
+            f'lm loss {averaged_loss[0]}, '
+            f'kd loss {mos_loss}'
+        )
+    # else:
+    #     if max(args.num_experts) <= 1:
+    #         return loss, {'lm loss': averaged_loss[0]}
+    #     loss = loss + moe_loss
+    #     return loss, {'lm loss': averaged_loss[0], 'moe loss': moe_loss}
+    else:
+        # if max(args.num_experts) <= 1:
+            # return loss, {'lm loss': averaged_loss[0]}
+        loss = dpo_loss
+        return loss, {'lm loss': averaged_loss[0], 'dpo loss': dpo_loss}
+
 
 def calculate_mos_loss(
         args,
@@ -396,6 +437,76 @@ def calculate_mos_loss(
 
         mos_loss = mos_loss.div(args.seq_length) * beta
     return mos_loss
+
+def calculate_dpo_loss(
+        args,
+        stu_output,
+        teacher_model,
+        tokens,
+        position_ids,
+        attention_mask
+):
+    mos_loss = 0
+    alpha = args.kd_alpha_ce
+    beta = args.kd_beta_ce
+    kd_temp = args.kd_temp
+    kd_temp = 1.0
+    beta = 0.1
+
+    if teacher_model:
+        with torch.no_grad():
+            if (
+                        args.curriculum_learning_legacy and
+                        args.curriculum_seqlen < args.seq_length
+            ):
+                assert args.curriculum_seqlen is not None
+                curriculum_seqlen = args.curriculum_seqlen
+                tokens = tokens[:, :curriculum_seqlen].contiguous()
+                position_ids = position_ids[:, :curriculum_seqlen].contiguous()
+                csl = curriculum_seqlen
+                attention_mask = (
+                        attention_mask[:, :, :csl, :csl].contiguous()
+                )
+                # No need to truncate labels
+                # as we do not need it for the teacher logits
+            ref_output, ref_other_losses = teacher_model(
+                tokens,
+                position_ids,
+                attention_mask
+            )
+            assert stu_output.size() == ref_output.size(), (
+                    'ref and student output should match in size. '
+                    f'Student: {stu_output.size()}, '
+                    f'Reference: {ref_output.size()}, '
+                    f'CL seq length {args.curriculum_seqlen}'
+            )
+
+        student_logits = F.log_softmax(stu_output / kd_temp, dim=2)
+        # Labels ?
+        logprobs = torch.gather(student_logits, dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        # The target logits is expected to be probabilities.
+        # If we use log_softmax,
+        # then we need to set target_log to true
+        # when initializing the KLDivLoss.
+        ref_logits = F.softmax(ref_output / kd_temp, dim=2)
+        ref_logprobs = torch.gather(ref_logits, dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+        # Partial DPO loss (from preferred/unpreferred)
+        logprob_ratio = logprobs - ref_logprobs
+        #------------ [ToDo]-------------
+        # # Get ratios of unpreferred log probabilities from model and ref model
+        # unpreferred_logprob_ratio = unpreferred_logprobs - ref_unpreferred_logprobs
+
+        # Difference of logprobs ratios scaled by beta
+        # scaled_diff_logprob_ratios = self.beta * (preferred_logprob_ratio - unpreferred_logprob_ratio)
+        #------------ [ToDo]-------------
+        scaled_diff_logprob_ratios = beta * (logprob_ratio)
+
+        # Losses computed as negative logsigmoid of scaled difference
+        dpo_loss = -F.logsigmoid(scaled_diff_logprob_ratios)
+
+    return dpo_loss
 
 
 def forward_step(data_iterator, model):
