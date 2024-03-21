@@ -539,16 +539,10 @@ def forward_step(data_iterator, model):
         )
     else:
         output_tensor, other_losses = model(
-            tokens[0],
-            position_ids[0],
-            attention_mask[0],
-            labels=labels[0]
-        )
-        output_tensor_u, other_losses_u = model(
-            tokens[1],
-            position_ids[1],
-            attention_mask[1],
-            labels=labels[1]
+            tokens,
+            position_ids,
+            attention_mask,
+            labels=labels
         )
     if (
                 args.curriculum_learning_legacy and
