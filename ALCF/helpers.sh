@@ -217,7 +217,8 @@ setEnv() {
     elif [[ $(hostname) == x3* ]]; then
         echo "Running on Polaris !!"
         # ---- [load conda] ---------------------
-        module load conda/2023-10-04; conda activate cu118-pt221 ; unset PYTHONUSERBASE
+        # module load conda/2023-10-04; conda activate cu118-pt221 ; unset PYTHONUSERBASE
+        module load conda/2023-10-04; conda activate base
         # module load conda/2023-10-04 ; conda activate /lus/eagle/projects/datascience/foremans/miniconda3/envs/polaris/py311-cu118 
         # ; conda activate /lus/eagle/projects/datascience/foremans/miniconda3/envs/polaris/2024-03-06
         # export PYTHONUSERBASE="${HOME}/.local/polaris/conda/py311-cu118"
