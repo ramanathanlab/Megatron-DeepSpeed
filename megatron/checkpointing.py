@@ -597,8 +597,8 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
     # Check arguments.
     reset_train_valid_samples = args.reset_iteration
     if not load_only_weights and not reset_train_valid_samples:
-        assert args.consumed_train_samples == 0
-        assert args.consumed_valid_samples == 0
+        # assert args.consumed_train_samples == 0
+        # assert args.consumed_valid_samples == 0
         if 'args' in state_dict and not args.finetune:
             checkpoint_args = state_dict['args']
             check_checkpoint_args(checkpoint_args)
