@@ -1214,6 +1214,10 @@ def _add_data_args(parser):
                        '--*-data-path args')
     group.add_argument('--data-file-list', type=str, default=None,
                        help='The file with the list of dataset and weights')
+    group.add_argument('--data-file-list-u', type=str, default=None,
+                       help='The file with the list of unpreferred dataset and weights')
+    group.add_argument('--data-file-list-p', type=str, default=None,
+                       help='The file with the list of preferred dataset and weights')
     
     group.add_argument('--split', type=str, default='969, 30, 1',
                        help='Comma-separated list of proportions for training,'
