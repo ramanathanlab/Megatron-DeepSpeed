@@ -82,6 +82,8 @@ run_cmd="
     --max-position-embeddings ${SEQ} \
     --micro-batch-size ${MICRO_BATCH} \
     --data-file-list ${DATA_FILE_LIST} \
+    --data-file-list-u ${DATA_FILE_LIST_U} \
+    --data-file-list-p ${DATA_FILE_LIST_P} \
     --tensor-model-parallel-size ${TP} \
     --global-batch-size ${GLOBAL_BATCH} \
     --pipeline-model-parallel-size ${PP} \
