@@ -823,30 +823,44 @@ def main():
             data_cache_path=args.data_cache_path)
             print_rank_0("> finished creating preferred GPT datasets ...")
 
-        # Data iterator
+        # Data loaders
         print(f'args.consumed_train_samples: {args.consumed_train_samples}')
         print(f'args.dataloader_type: {args.dataloader_type}')
         train_dataloader_u = build_pretraining_data_loader(
                                     train_ds_u, args.consumed_train_samples)
+        train_dataloader_p = build_pretraining_data_loader(
+                                    train_ds_p, args.consumed_train_samples)
 
         # Build train iterators
         dl_type = args.dataloader_type
         assert dl_type in ['single', 'cyclic']
 
         if train_dataloader_u is not None:
-            print(f'train_dataloader_u is not None..')
+            print(f'unpreferred train_dataloader is not None..')
             train_data_iterator_u = iter(train_dataloader_u) if dl_type == 'single' \
                                 else iter(cyclic_iter(train_dataloader_u))
-        print_rank_0("> finished creating train_data_iterator_u ...")
+        print_rank_0("> finished creating unpreferred train_data_iterator...")
+        if train_dataloader_p is not None:
+            print(f'preferred train_dataloader is not None..')
+            train_data_iterator_p = iter(train_dataloader_p) if dl_type == 'single' \
+                                else iter(cyclic_iter(train_dataloader_p))
+        print_rank_0("> finished creating preferred train_data_iterator...")
 
         # Get batch
         timers = get_timers()
-        timers('batch-generator-u', log_level=2).start()
+        timers('batch-generator-unpreferred', log_level=2).start()
         tokens_u, labels_u, loss_mask_u, attention_mask_u, position_ids_u = get_batch(
-            train_data_iterator_u)
-        timers('batch-generator-u').stop()
+                                                                                train_data_iterator_u)
+        timers('batch-generator-unpreferred').stop()
         # print(f'tokens shape: {tokens_u.shape}')
-        print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for train_data_iterator_u ...")
+        print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for unpref train_data_iterator ...")
+
+        timers('batch-generator-preferred', log_level=2).start()
+        tokens_p, labels_p, loss_mask_p, attention_mask_p, position_ids_p = get_batch(
+                                                                                train_data_iterator_p)
+        timers('batch-generator-preferred').stop()
+        # print(f'tokens shape: {tokens_u.shape}')
+        print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for pref train_data_iterator ...")
 
         # Model forward
         # output_tensor, other_losses = model[0](
@@ -856,14 +870,26 @@ def main():
         #                                 labels=labels_u
         #                             ) # OUT OF MEMORY ERROR even with 4 nodes
 
-        stu_output, other_losses = model[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes
-        print_rank_0("> finished a forward pass to get logits ...")
+        # Computing logits and logps for preferred and unpreferred data batches
+        output_u, other_losses_u = model[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes for 7B model
+        print_rank_0("> finished a forward pass to get unpref logits ...")
 
-        output_tensor = tensor_parallel.vocab_parallel_cross_entropy(
-                                stu_output.contiguous().float(),
+        output_tensor_u, logprobs_u = tensor_parallel.vocab_parallel_cross_entropy(
+                                output_u.contiguous().float(),
                                 labels_u
-                            ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR
-        print(f'Computed output_tensor: {output_tensor}')
+                            ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+        print(f'Computed unpreferred output_tensor: {output_tensor_u}')
+        print(f'Computed unpreferred logprobs: {logprobs_u}')
+
+        output_p, other_losses_p = model[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
+        print_rank_0("> finished a forward pass to get pref logits ...")
+
+        output_tensor_p, logprobs_p = tensor_parallel.vocab_parallel_cross_entropy(
+                        output_p.contiguous().float(),
+                        labels_p
+                    ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+        print(f'Computed preferred output_tensor: {output_tensor_p}')
+        print(f'Computed preferred logprobs: {logprobs_p}')
 
     return model
 
