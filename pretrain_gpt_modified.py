@@ -848,6 +848,23 @@ def main():
         # print(f'tokens shape: {tokens_u.shape}')
         print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for train_data_iterator_u ...")
 
+        # Model forward
+        # output_tensor, other_losses = model[0](
+        #                                 tokens_u,
+        #                                 position_ids_u,
+        #                                 attention_mask_u,
+        #                                 labels=labels_u
+        #                             ) # OUT OF MEMORY ERROR even with 4 nodes
+
+        stu_output, other_losses = model[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes
+        print_rank_0("> finished a forward pass to get logits ...")
+
+        output_tensor = tensor_parallel.vocab_parallel_cross_entropy(
+                                stu_output.contiguous().float(),
+                                labels_u
+                            ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR
+        print(f'Computed output_tensor: {output_tensor}')
+
     return model
 
 # def main():
