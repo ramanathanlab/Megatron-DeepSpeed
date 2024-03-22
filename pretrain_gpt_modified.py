@@ -51,9 +51,10 @@ from megatron.training import print_datetime, _create_ds_config_dict
 from megatron.training import setup_model_and_optimizer
 from megatron.training import load_model_weights_only, get_model
 from megatron.training import load_model_weights_only_modified
-from megatron.training import get_optimizer_param_scheduler
+from megatron.training import get_optimizer_param_scheduler, cyclic_iter
 from megatron.optimizer import get_megatron_optimizer
 from megatron.checkpointing import load_checkpoint
+from megatron.data.data_samplers import build_pretraining_data_loader
 
 # RANK = setup_torch(
 #     backend='deepspeed',
@@ -715,6 +716,8 @@ def main():
 
         # model = model_provider()
         model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder)
+
+        # ---------- Reference model -------------
         # model_ref, _, _ = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder) # throwing assertion error
         model_ref = get_model(model_provider, ModelType.encoder_or_decoder) # works but does it load from a checkpoint or randomly initializes?
         # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
@@ -743,6 +746,107 @@ def main():
         # THINGS THAT DID NOT WORK FOR LOADING FROM CHECKPOINT
         # model_ref, optimizer_ref, lr_scheduler_ref = load_model_weights_only(model_provider) # DID NOT WORK - train_batch_size is not equal to micro_batch_per_gpu * gradient_acc_step * world_size 32 != 8 * 1 * 8
         # model_ref, optimizer_ref, lr_scheduler_ref = load_model_weights_only_modified(model_provider) # DID NOT WORK -     optimizer = FusedAdam(TypeError: FusedAdam.__init__() got an unexpected keyword argument 'beta1'
+        # ----------------------------------------
+
+        if args.data_file_list_u is not None:
+            print(f'data files list unpreferred: {args.data_file_list_u}')
+
+            # Number of train/valid/test samples.
+            if args.train_samples:
+                print(f'args.train_samples: {args.train_samples}')
+                train_samples = args.train_samples
+            else:
+                print(f'args.train_iters: {args.train_iters}')
+                print(f'args.global_batch_size: {args.global_batch_size}')
+                train_samples = args.train_iters * args.global_batch_size
+
+            print(f'args.eval_interval: {args.eval_interval}')
+            print(f'args.eval_iters: {args.eval_iters}')
+            eval_iters = (args.train_iters // args.eval_interval + 1) * \
+                        args.eval_iters
+            test_iters = args.eval_iters
+            train_val_test_num_samples = [train_samples,
+                                        eval_iters * args.global_batch_size,
+                                        test_iters * args.global_batch_size]
+            print(f'train_val_test_num_samples: {train_val_test_num_samples}')
+            # print(f'args.data_impl: {args.data_impl}')
+            # print(f'args.split: {args.split}')
+            # print(f'args.seq_length: {args.seq_length}')
+            # print(f'args.seed: {args.seed}')
+            # print(f'args.train_data_path: {args.train_data_path}')
+            # print(f'args.valid_data_path: {args.valid_data_path}')
+            # print(f'args.test_data_path: {args.test_data_path}')
+            # print(f'args.data_cache_path: {args.data_cache_path}')
+
+            files_u = []
+            with open(args.data_file_list_u, 'r') as flist:
+                for f in flist.readlines():
+                    w, fname = f.split()
+                    files_u.append(float(w))
+                    files_u.append(fname)
+            train_ds_u, valid_ds_u, test_ds_u = build_train_valid_test_datasets(
+            data_prefix=files_u,
+            data_impl=args.data_impl,
+            splits_string=args.split,
+            train_valid_test_num_samples=train_val_test_num_samples,
+            seq_length=args.seq_length,
+            seed=args.seed,
+            skip_warmup=True,
+            # skip_warmup=(not args.mmap_warmup),
+            train_data_prefix=args.train_data_path,
+            valid_data_prefix=args.valid_data_path,
+            test_data_prefix=args.test_data_path,
+            data_cache_path=args.data_cache_path)
+            print_rank_0("> finished creating unpreferred GPT datasets ...")
+
+        if args.data_file_list_p is not None:
+            print(f'data files list preferred: {args.data_file_list_p}')
+
+            files_p = []
+            with open(args.data_file_list_p, 'r') as flist:
+                for f in flist.readlines():
+                    w, fname = f.split()
+                    files_p.append(float(w))
+                    files_p.append(fname)
+            train_ds_p, valid_ds_p, test_ds_p = build_train_valid_test_datasets(
+            data_prefix=files_p,
+            data_impl=args.data_impl,
+            splits_string=args.split,
+            train_valid_test_num_samples=train_val_test_num_samples,
+            seq_length=args.seq_length,
+            seed=args.seed,
+            skip_warmup=True,
+            # skip_warmup=(not args.mmap_warmup),
+            train_data_prefix=args.train_data_path,
+            valid_data_prefix=args.valid_data_path,
+            test_data_prefix=args.test_data_path,
+            data_cache_path=args.data_cache_path)
+            print_rank_0("> finished creating preferred GPT datasets ...")
+
+        # Data iterator
+        print(f'args.consumed_train_samples: {args.consumed_train_samples}')
+        print(f'args.dataloader_type: {args.dataloader_type}')
+        train_dataloader_u = build_pretraining_data_loader(
+                                    train_ds_u, args.consumed_train_samples)
+
+        # Build train iterators
+        dl_type = args.dataloader_type
+        assert dl_type in ['single', 'cyclic']
+
+        if train_dataloader_u is not None:
+            print(f'train_dataloader_u is not None..')
+            train_data_iterator_u = iter(train_dataloader_u) if dl_type == 'single' \
+                                else iter(cyclic_iter(train_dataloader_u))
+        print_rank_0("> finished creating train_data_iterator_u ...")
+
+        # Get batch
+        timers = get_timers()
+        timers('batch-generator-u', log_level=2).start()
+        tokens_u, labels_u, loss_mask_u, attention_mask_u, position_ids_u = get_batch(
+            train_data_iterator_u)
+        timers('batch-generator-u').stop()
+        # print(f'tokens shape: {tokens_u.shape}')
+        print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for train_data_iterator_u ...")
 
     return model
 
