@@ -891,6 +891,29 @@ def main():
         print(f'Computed preferred output_tensor: {output_tensor_p}')
         print(f'Computed preferred logprobs: {logprobs_p}')
 
+        # Reference model in inference mode
+        # Computing logits and logps for preferred and unpreferred data batches from ref model
+        with torch.no_grad():
+            ref_output_u, _ = model_ref[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes for 7B model
+            print_rank_0("> finished a forward pass to get unpref logits ...")
+
+            ref_output_tensor_u, ref_logprobs_u = tensor_parallel.vocab_parallel_cross_entropy(
+                                    ref_output_u.contiguous().float(),
+                                    labels_u
+                                ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+            print(f'Computed unpreferred output_tensor: {ref_output_tensor_u}')
+            print(f'Computed unpreferred logprobs: {ref_logprobs_u}')
+
+            ref_output_p, _ = model_ref[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
+            print_rank_0("> finished a forward pass to get pref logits ...")
+
+            ref_output_tensor_p, ref_logprobs_p = tensor_parallel.vocab_parallel_cross_entropy(
+                            ref_output_p.contiguous().float(),
+                            labels_p
+                        ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+            print(f'Computed preferred output_tensor: {ref_output_tensor_p}')
+            print(f'Computed preferred logprobs: {ref_logprobs_p}')
+
     return model
 
 # def main():
