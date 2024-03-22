@@ -258,11 +258,16 @@ setData() {  # ---- [dfl: abbrv. for DATA_FILE_LIST] -------------------------
     elif [[ $(hostname) == x1* ]]; then
         dfl_fallback="/gila/Aurora_deployment/AuroraGPT/datasets/dolma/data_file_list_reweighted.txt"
     elif [[ $(hostname) == x3* ]]; then
-        dfl_fallback="/eagle/datasets/dolma/data_file_list_reweighted.txt"
+        # dfl_fallback="/eagle/datasets/dolma/data_file_list_reweighted.txt"
+        dfl_fallback="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list.txt"
+        dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_u.txt"
+        dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_p.txt"
     else
         echo "Unknown hostname. Must manually specify DATA_FILE_LIST."
     fi
     dfl="${1:-${dfl_fallback}}"
+    dflu="${1:-${dfl_fallback_u}}"
+    dflp="${1:-${dfl_fallback_p}}"
     # dfl_fallback="/eagle/datasets/dolma/data_file_list_reweighted.txt"
     printf "Calling:  \`setData()\` with %s\n" "${dfl}"
     ndocs=$(wc -l < "${dfl}")
@@ -271,6 +276,8 @@ setData() {  # ---- [dfl: abbrv. for DATA_FILE_LIST] -------------------------
     dcp="${HERE}/.cache/${dfl_stem}/index-cache"
     mkdir -p dcp
     export DATA_FILE_LIST="${dfl}"
+    export DATA_FILE_LIST_U="${dflu}"
+    export DATA_FILE_LIST_P="${dflp}"
     export NUM_DOCS="${ndocs}"
     export WEIGHT_SUM="${ws}"
     export DFL_STEM="${dfl_stem}"
