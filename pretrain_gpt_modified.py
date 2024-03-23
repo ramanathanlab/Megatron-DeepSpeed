@@ -443,6 +443,10 @@ def calculate_dpo_loss(
         args,
         stu_output,
         teacher_model,
+        logprobs_p,
+        logprobs_u,
+        ref_logprobs_p,
+        ref_logprobs_u,
         tokens,
         position_ids,
         attention_mask
@@ -452,7 +456,7 @@ def calculate_dpo_loss(
     beta = args.kd_beta_ce
     kd_temp = args.kd_temp
     kd_temp = 1.0
-    beta = 0.1
+    beta = 0.1 # add to cmdline args
 
     if teacher_model:
         with torch.no_grad():
@@ -490,24 +494,34 @@ def calculate_dpo_loss(
         # If we use log_softmax,
         # then we need to set target_log to true
         # when initializing the KLDivLoss.
-        ref_logits = F.softmax(ref_output / kd_temp, dim=2)
-        ref_logprobs = torch.gather(ref_logits, dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        # Partial DPO loss (from preferred/unpreferred)
-        logprob_ratio = logprobs - ref_logprobs
-        #------------ [ToDo]-------------
-        # # Get ratios of unpreferred log probabilities from model and ref model
-        # unpreferred_logprob_ratio = unpreferred_logprobs - ref_unpreferred_logprobs
+    # Get ratios of preferred log probabilities from model and ref model
+    logprob_ratio_p = logprobs_p - ref_logprobs_p
 
-        # Difference of logprobs ratios scaled by beta
-        # scaled_diff_logprob_ratios = self.beta * (preferred_logprob_ratio - unpreferred_logprob_ratio)
-        #------------ [ToDo]-------------
-        scaled_diff_logprob_ratios = beta * (logprob_ratio)
+    # Get ratios of unpreferred log probabilities from model and ref model
+    logprob_ratio_u = logprobs_u - ref_logprobs_u
 
-        # Losses computed as negative logsigmoid of scaled difference
-        dpo_loss = -F.logsigmoid(scaled_diff_logprob_ratios)
+    # Difference of logprobs ratios scaled by beta
+    scaled_diff_logprob_ratios = beta * (logprob_ratio_p - logprob_ratio_u)
 
-    return dpo_loss
+    # Losses computed as negative logsigmoid of scaled difference
+    losses = -F.logsigmoid(scaled_diff_logprob_ratios)
+
+    # preferred dpo rewards
+    pref_dpo_rewards = (beta * logprob_ratio_p).detach()
+
+    # unpreferred dpo rewards
+    unpref_dpo_rewards = (beta * logprob_ratio_u).detach()
+
+    # Implicit DPO rewards
+    implicit_dpo_rewards = (pref_dpo_rewards > unpref_dpo_rewards).float()
+    rewards = implicit_dpo_rewards.cpu().mean()
+
+    # Compute mean loss
+    dpo_loss = losses.mean()
+    # print(f'Loss dtype: {loss.dtype}')
+
+    return dpo_loss, rewards
 
 
 def forward_step(data_iterator, model):
