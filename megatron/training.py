@@ -704,6 +704,95 @@ def setup_model_and_optimizer(model_provider_func,
 
     return model, optimizer, opt_param_scheduler
 
+from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
+import contextlib
+from megatron.core.utils import get_attr_wrapped_model, get_model_type, get_model_config
+def train_step_dpo(data_iterator, model,
+                optimizer, opt_param_scheduler, config,
+                loss,
+                forward_only=False):
+    """Single training step."""
+    args = get_args()
+    timers = get_timers()
+
+    if args.deepspeed and args.ds_pipeline_enabled:
+        print(f'In train step if args.deepspeed and args.ds_pipeline_enabled..')
+        skipped_iter = 0
+        num_zeros_in_grad = 0
+        assert isinstance(model[0], deepspeed.PipelineEngine)
+        loss = model[0].train_batch(data_iter=data_iterator)
+        grad_norm = model[0].get_global_grad_norm()
+        return {'lm loss' : loss}, skipped_iter, grad_norm, num_zeros_in_grad
+
+    # Set grad to zero
+    if not args.deepspeed:
+        print(f'In train step and NOT args.deepspeed with optimi zero_grad..')
+        if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
+            for partition in model:
+                partition.zero_grad_buffer()
+        optimizer.zero_grad()
+
+    # Forward backward pass
+    timers('forward-backward', log_level=1).start(
+        barrier=args.barrier_with_L1_time)
+    forward_backward_func = get_forward_backward_func()
+
+    # losses_reduced = forward_backward_func(
+    #                             )
+    if isinstance(model, list):
+        assert len(model) == 1, \
+            "list of models .."
+        print(f'number of models in the list: {len(model)}')
+        model = model[0]
+    mconfig = get_model_config(model)
+
+    no_sync_func = mconfig.no_sync_func
+    print(f'no_syn_func: {no_sync_func}')
+    if no_sync_func is None and isinstance(model, torchDDP):
+        print(f'On no_sync_func is None and isinstance(model, torchDDP) branch ..')
+        no_sync_func = model.no_sync
+    if no_sync_func is None:
+        print(f'On no_sync_func is None branch ..')
+        no_sync_func = contextlib.nullcontext
+
+    if args.deepspeed:
+        print(f'setting gradient accumulation boundary to false ..')
+        model.set_gradient_accumulation_boundary(False)
+
+    model_type = get_model_type(model)
+
+    num_microbatches = get_num_microbatches()
+    print(f'num_microbatches: {num_microbatches}')
+
+    forward_data_store = []
+    input_tensor, output_tensor_grad = None, None
+
+    # if False:
+    with no_sync_func():
+
+        if mconfig.enable_autocast:
+            print(f'mconfig.enable_autocast: {mconfig.enable_autocast}')
+            context_manager = torch.autocast("cuda", dtype=mconfig.autocast_dtype)
+        else:
+            context_manager = contextlib.nullcontext()
+        
+        with context_manager:
+            print(f'context_manager: {context_manager}')
+            output_tensor = loss
+        # for i in range(num_microbatches - 1):
+        # output_tensor = forward_step(forward_step_func, data_iterator, model, num_microbatches,
+        #                                 input_tensor, forward_data_store, config, collect_non_loss_data)
+        if not forward_only:
+            # backward_step(input_tensor, output_tensor, output_tensor_grad, model_type, config, model)
+            # Backward pass
+            if args.deepspeed:
+                model.backward(output_tensor)
+
+    if args.deepspeed:
+        model.set_gradient_accumulation_boundary(True)
+
+    return None
+
 
 
 def train_step(forward_step_func, data_iterator,
@@ -713,6 +802,7 @@ def train_step(forward_step_func, data_iterator,
     timers = get_timers()
 
     if args.deepspeed and args.ds_pipeline_enabled:
+        print(f'In train step if args.deepspeed and args.ds_pipeline_enabled..')
         skipped_iter = 0
         num_zeros_in_grad = 0
         assert isinstance(model[0], deepspeed.PipelineEngine)
