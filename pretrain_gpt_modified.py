@@ -52,9 +52,15 @@ from megatron.training import setup_model_and_optimizer
 from megatron.training import load_model_weights_only, get_model
 from megatron.training import load_model_weights_only_modified
 from megatron.training import get_optimizer_param_scheduler, cyclic_iter
+from megatron.training import train, train_step
+from megatron.training import train_step_dpo
 from megatron.optimizer import get_megatron_optimizer
 from megatron.checkpointing import load_checkpoint
 from megatron.data.data_samplers import build_pretraining_data_loader
+from megatron.core.pipeline_parallel import get_forward_backward_func
+from megatron.arguments import core_transformer_config_from_args
+from megatron import update_num_microbatches
+from megatron import get_num_microbatches
 
 # RANK = setup_torch(
 #     backend='deepspeed',
@@ -382,6 +388,31 @@ def dpo_loss_func(loss_mask, dpo_loss, output_tensor):
         loss = dpo_loss
         return loss, {'lm loss': averaged_loss[0], 'dpo loss': dpo_loss}
 
+def batch_seq_logprobs(logits, labels):
+    """ Function to compute a batch of sequence log probabilities """
+
+    logits = logits[:, :-1, :] # skip last logit
+    logits_logsoftmax = logits.log_softmax(-1) # compute log softmax of logits
+
+    labels = labels[:, 1:].clone() # clone labels
+
+    # # Loss mask to avoid padded tokens while computing loss
+    # loss_mask = labels != tokenizer.pad_token_id
+
+    # print(f'Labels shape: {labels.shape}')
+    # print(f'loss_mask shape: {loss_mask.shape}')
+    # print(f'loss_mask dtype: {loss_mask.dtype}')
+
+    # Gather logps and squeeze last dimension
+    logprobs = torch.gather(logits_logsoftmax, dim=2, index=labels.unsqueeze(2)).squeeze(2)
+    # print(f'seq_logprobs shape: {logprobs.shape}')
+
+    # Weighted sum over logprobs using loss mask
+    # seq_logprobs = (logprobs * loss_mask).sum(-1)
+    seq_logprobs = logprobs.sum(-1)
+
+    return seq_logprobs
+
 
 def calculate_mos_loss(
         args,
@@ -522,6 +553,28 @@ def calculate_dpo_loss(
     # print(f'Loss dtype: {loss.dtype}')
 
     return dpo_loss, rewards
+
+def compute_dp_loss(logprobs_p, ref_logprobs_p,
+                    logprobs_u, ref_logprobs_u,
+                    beta=0.1):
+
+    # Get ratios of preferred log probabilities from model and ref model
+    logprob_ratio_p = logprobs_p - ref_logprobs_p
+
+    # Get ratios of unpreferred log probabilities from model and ref model
+    logprob_ratio_u = logprobs_u - ref_logprobs_u
+
+    # Difference of logprobs ratios scaled by beta
+    scaled_diff_logprob_ratios = beta * (logprob_ratio_p - logprob_ratio_u)
+
+    # Losses computed as negative logsigmoid of scaled difference
+    losses = -F.logsigmoid(scaled_diff_logprob_ratios)
+
+    # Compute mean loss
+    dp_loss = losses.mean()
+
+    return dp_loss
+
 
 
 def forward_step(data_iterator, model):
@@ -892,7 +945,8 @@ def main():
                                 output_u.contiguous().float(),
                                 labels_u
                             ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
-        print(f'Computed unpreferred output_tensor: {output_tensor_u}')
+        # logprobs_u = batch_seq_logprobs(output_u, labels_u)
+        # print(f'Computed unpreferred output_tensor: {output_tensor_u}')
         print(f'Computed unpreferred logprobs: {logprobs_u}')
 
         output_p, other_losses_p = model[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
@@ -902,7 +956,8 @@ def main():
                         output_p.contiguous().float(),
                         labels_p
                     ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
-        print(f'Computed preferred output_tensor: {output_tensor_p}')
+        # logprobs_p = batch_seq_logprobs(output_p, labels_p)
+        # print(f'Computed preferred output_tensor: {output_tensor_p}')
         print(f'Computed preferred logprobs: {logprobs_p}')
 
         # Reference model in inference mode
@@ -915,7 +970,8 @@ def main():
                                     ref_output_u.contiguous().float(),
                                     labels_u
                                 ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
-            print(f'Computed unpreferred output_tensor: {ref_output_tensor_u}')
+            # ref_logprobs_u = batch_seq_logprobs(ref_output_u, labels_u)
+            # print(f'Computed unpreferred output_tensor: {ref_output_tensor_u}')
             print(f'Computed unpreferred logprobs: {ref_logprobs_u}')
 
             ref_output_p, _ = model_ref[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
@@ -925,8 +981,99 @@ def main():
                             ref_output_p.contiguous().float(),
                             labels_p
                         ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
-            print(f'Computed preferred output_tensor: {ref_output_tensor_p}')
+            # ref_logprobs_p = batch_seq_logprobs(ref_output_p, labels_p)
+            # print(f'Computed preferred output_tensor: {ref_output_tensor_p}')
             print(f'Computed preferred logprobs: {ref_logprobs_p}')
+
+        # Compute loss
+        loss = compute_dp_loss(logprobs_p, ref_logprobs_p,
+                    logprobs_u, ref_logprobs_u,
+                    beta=0.1)
+        print(f'Computed loss: {loss}')
+
+        print(f'args.ds_pipeline_enabled: {args.ds_pipeline_enabled}')
+        if args.deepspeed and args.ds_pipeline_enabled:
+            print(f'In train step if args.deepspeed and args.ds_pipeline_enabled..')
+            skipped_iter = 0
+            num_zeros_in_grad = 0
+            assert isinstance(model[0], deepspeed.PipelineEngine)
+            loss = model[0].train_batch(data_iter=train_data_iterator_p)
+            grad_norm = model[0].get_global_grad_norm()
+        # return {'lm loss' : loss}, skipped_iter, grad_norm, num_zeros_in_grad
+
+        if not args.skip_train:
+            print_rank_0('training ...')
+
+            if args.dataloader_type == 'cyclic' and args.retro_add_retriever:
+                args.train_iters = args.retro_cyclic_train_iters
+                print_rank_0("retro cyclic train iters : %d" % args.train_iters)
+
+            iteration = 0
+            if args.train_iters > 0:
+                print(f'In train step if args.train_iters: {args.train_iters} ..')
+
+                # Turn on training mode which enables dropout.
+                for model_module in model:
+                    model_module.train()
+
+                # Tracking loss.
+                total_loss_dict = {}
+
+                # Iterations.
+                iteration = args.iteration
+
+                 # Translate args to core configuration
+                config = core_transformer_config_from_args(args)
+
+                config.timers = timers
+
+                timers('interval-time', log_level=0).start(barrier=True)
+                print_datetime('before the start of training step')
+                report_memory_flag = True
+
+                while iteration < args.train_iters and (args.train_tokens is None or \
+                    args.consumed_train_tokens < args.train_tokens):
+                    print(f'args.train_tokens: {args.train_tokens}, args.consumed_train_tokens: {args.consumed_train_tokens}')
+                    print(f'args.consumed_train_samples: {args.consumed_train_samples}')
+                    update_num_microbatches(args.consumed_train_samples)
+                    
+                    if args.deepspeed:
+                        # inform deepspeed of any batch size changes
+                        global_batch_size = mpu.get_data_parallel_world_size() * \
+                                            args.micro_batch_size * \
+                                            get_num_microbatches()
+                        print(f'global batch size: {global_batch_size}')
+                        model[0].set_train_batch_size(global_batch_size)
+
+                    if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
+                        print(f'args.curriculum_learning_legacy and not args.no_pipeline_parallel is {args.curriculum_learning_legacy} and {args.no_pipeline_parallel} ..')
+                        curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
+                                args.iteration + 1)
+                        if iteration == 0 or curriculum_seqlen != args.curriculum_seqlen:
+                            if args.use_rotary_position_embeddings:
+                                update_rotary_pos_emb(curriculum_seqlen)
+                        args.curriculum_seqlen = curriculum_seqlen
+
+                    args.curr_iteration = iteration
+                    print(f'iteration: {iteration}')
+
+                    # model[0].backward(loss)
+                    results = train_step_dpo(train_data_iterator_p,
+                                model,
+                                optimizer,
+                                opt_param_scheduler,
+                                config,
+                                loss,
+                                forward_only=False) # FAILS HERE with the model backward step: TypeError: _VocabParallelCrossEntropy.backward() takes 2 positional arguments but 3 were given
+
+                    # Update parameters
+                    if args.deepspeed:
+                        increment = get_num_microbatches() * \
+                                    args.micro_batch_size * \
+                                    args.data_parallel_size
+                        model[0].step(lr_kwargs={'increment': increment})
+                        update_successful = model[0].was_step_applied()
+
 
     return model
 
