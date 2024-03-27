@@ -92,7 +92,8 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
         # Store softmax, target-mask and masked-target for backward pass.
         ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
 
-        return loss, log_probs
+        return loss
+        # return loss, log_probs
 
     @staticmethod
     def backward(ctx, grad_output):
