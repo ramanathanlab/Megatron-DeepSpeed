@@ -53,7 +53,7 @@ from megatron.training import load_model_weights_only, get_model
 from megatron.training import load_model_weights_only_modified
 from megatron.training import get_optimizer_param_scheduler, cyclic_iter
 from megatron.training import train, train_step
-from megatron.training import train_step_dpo
+from megatron.training import train_step_dpo, training_log_dpo
 from megatron.optimizer import get_megatron_optimizer
 from megatron.checkpointing import load_checkpoint
 from megatron.data.data_samplers import build_pretraining_data_loader
@@ -734,6 +734,7 @@ def git_ds_info():
 def main():
     # if RANK == 0:
     #     setup_wandb()
+
     if os.getenv('TORCH_PROFILER_ENABLED') == '1':
         from torch.profiler import profile, record_function, ProfilerActivity
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
@@ -917,7 +918,10 @@ def main():
 
         iteration = 0
         print_rank_0(f'args.train_iters: {args.train_iters}')
-
+        report_memory_flag = True
+        if torch.distributed.get_rank() == 0:
+            averaged_loss_iter = []
+            averaged_rewards_iter = []
         for i in range(args.train_iters):
             # Get batch
             timers = get_timers()
@@ -1011,8 +1015,8 @@ def main():
             final = -F.logsigmoid(sdiff_ratio)
             # print(f'final: {final}')
 
-            mos_loss = torch.sum(final)
-            print_rank_0(f'iteration: {iteration}, mos_loss: {mos_loss}')
+            dloss = torch.sum(final)
+            # print_rank_0(f'iteration: {iteration}, mos_loss: {dloss}')
             # print(f'mos_loss shape: {mos_loss.size()}')
 
             # print(f'args.ds_pipeline_enabled: {args.ds_pipeline_enabled}')
@@ -1025,7 +1029,7 @@ def main():
             # print(f'loss_mask_p sum: {torch.sum(loss_mask_p), 8*4096}')# print(f'loss_mask_p shape: {loss_mask_p.size()}')
 
             model[0].train()
-            model[0].backward(mos_loss)
+            model[0].backward(dloss)
 
             increment = get_num_microbatches() * \
                                         args.micro_batch_size * \
@@ -1046,6 +1050,21 @@ def main():
             args.consumed_train_samples += new_samples
             # print(f'args.consumed_train_samples: {args.consumed_train_samples}')
 
+            # Reduce loss for logging.
+            averaged_loss = average_losses_across_data_parallel_group([dloss])
+            loss_dict = {'loss': averaged_loss}
+            print_rank_0(f'iteration: {iteration}, dloss: {averaged_loss.detach().cpu().tolist()}')
+            psrewards_p = (0.1 * (seq_logps_p - rseq_logps_p)).detach()
+            psrewards_u = (0.1 * (seq_logps_u - rseq_logps_u)).detach()
+            psrewards = (psrewards_p > psrewards_u).float()
+            rewards = psrewards.cpu().mean()
+            print_rank_0(f'iteration: {iteration}, rewards: {rewards}')
+            if torch.distributed.get_rank() == 0:
+                averaged_loss_iter.append(averaged_loss.detach().cpu().tolist()[0])
+                averaged_rewards_iter.append(rewards.tolist())
+
+            # report_memory_flag = training_log_dpo(loss_dict, iteration, report_memory_flag)
+
             # logprobs_u = torch.exp(output_tensor_u)
             # # print(f'Computed unpreferred output_tensor: {output_tensor_u}')
             # print(f'Computed unpreferred logprobs: {logprobs_u}')
@@ -1058,7 +1077,10 @@ def main():
             #                 labels_p
             #             ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
 
-
+    torch.distributed.barrier()
+    if torch.distributed.get_rank() == 0:
+        print(averaged_loss_iter)
+        print(averaged_rewards_iter)
 
     return model
 
