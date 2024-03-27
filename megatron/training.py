@@ -919,6 +919,36 @@ def train_step(forward_step_func, data_iterator,
     return {}, skipped_iter, grad_norm, num_zeros_in_grad
 
 
+def training_log_dpo(loss_dict, iteration, report_memory_flag):
+    """Log training information such as losses ...."""
+
+    if wandb is not None and getattr(wandb, 'run', None) is not None:
+        assert wandb.run is not None
+    # wandb_metrics = {
+    #     'throughput/iteration-time': elapsed_time_per_iteration,  # 1000 ms / s
+    #     'throughput/samples_per_sec': samples_per_sec,
+    #     'throughput/samples_per_sec_per_replica': samples_per_sec_per_replica,
+    #     'throughput/tokens_per_sec': tokens_per_sec,
+    #     'throughput/tokens_per_sec_per_replica': tokens_per_sec_per_replica,
+    #     'throughput/tokens_per_gpu_per_sec': tokens_per_gpu_per_second,
+    #     'throughput/tokens_per_gpu_per_sec_per_replica': tokens_per_gpu_per_second_per_replica,
+    #     'throughput/tflops': tflops,
+    #     'throughput/approx_params_in_billions': approx_parameters_in_billions,
+    #     'throughput/elapsed_ms_per_iteration': elapsed_time_per_iteration,
+    #     'throughput/iteration': iteration,
+    # }
+    if loss_dict is not None:
+        wandb_metrics = {
+            'loss/iteration': iteration,
+            'loss': loss_dict['loss']
+        }
+
+    wandb.log(wandb_metrics)
+
+    return report_memory_flag
+
+
+
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
                  grad_norm, params_norm, num_zeros_in_grad,
