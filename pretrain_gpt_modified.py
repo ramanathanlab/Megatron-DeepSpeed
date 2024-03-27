@@ -391,10 +391,10 @@ def dpo_loss_func(loss_mask, dpo_loss, output_tensor):
 def batch_seq_logprobs(logits, labels):
     """ Function to compute a batch of sequence log probabilities """
 
-    logits = logits[:, :-1, :] # skip last logit
+    logits = logits[:-1, :, :] # skip last logit
     logits_logsoftmax = logits.log_softmax(-1) # compute log softmax of logits
 
-    labels = labels[:, 1:].clone() # clone labels
+    labels = labels[1:, :].clone() # clone labels
 
     # # Loss mask to avoid padded tokens while computing loss
     # loss_mask = labels != tokenizer.pad_token_id
@@ -941,10 +941,11 @@ def main():
         output_u, other_losses_u = model[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes for 7B model
         print_rank_0("> finished a forward pass to get unpref logits ...")
 
-        output_tensor_u, logprobs_u = tensor_parallel.vocab_parallel_cross_entropy(
+        output_tensor_u = tensor_parallel.vocab_parallel_cross_entropy(
                                 output_u.contiguous().float(),
                                 labels_u
                             ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+        logprobs_u = torch.exp(output_tensor_u)
         # logprobs_u = batch_seq_logprobs(output_u, labels_u)
         # print(f'Computed unpreferred output_tensor: {output_tensor_u}')
         print(f'Computed unpreferred logprobs: {logprobs_u}')
@@ -952,12 +953,13 @@ def main():
         output_p, other_losses_p = model[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
         print_rank_0("> finished a forward pass to get pref logits ...")
 
-        output_tensor_p, logprobs_p = tensor_parallel.vocab_parallel_cross_entropy(
+        output_tensor_p = tensor_parallel.vocab_parallel_cross_entropy(
                         output_p.contiguous().float(),
                         labels_p
                     ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+        logprobs_p = torch.exp(output_tensor_p)
         # logprobs_p = batch_seq_logprobs(output_p, labels_p)
-        # print(f'Computed preferred output_tensor: {output_tensor_p}')
+        print(f'Computed preferred output_tensor: {output_tensor_p}')
         print(f'Computed preferred logprobs: {logprobs_p}')
 
         # Reference model in inference mode
@@ -966,10 +968,11 @@ def main():
             ref_output_u, _ = model_ref[0](tokens_u, position_ids_u, attention_mask_u) # THIS WORKED with 4 nodes for 7B model
             print_rank_0("> finished a forward pass to get unpref logits ...")
 
-            ref_output_tensor_u, ref_logprobs_u = tensor_parallel.vocab_parallel_cross_entropy(
+            ref_output_tensor_u = tensor_parallel.vocab_parallel_cross_entropy(
                                     ref_output_u.contiguous().float(),
                                     labels_u
                                 ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+            ref_logprobs_u = torch.exp(ref_output_tensor_u)
             # ref_logprobs_u = batch_seq_logprobs(ref_output_u, labels_u)
             # print(f'Computed unpreferred output_tensor: {ref_output_tensor_u}')
             print(f'Computed unpreferred logprobs: {ref_logprobs_u}')
@@ -977,10 +980,11 @@ def main():
             ref_output_p, _ = model_ref[0](tokens_p, position_ids_p, attention_mask_p) # THIS WORKED with 4 nodes for 7B model
             print_rank_0("> finished a forward pass to get pref logits ...")
 
-            ref_output_tensor_p, ref_logprobs_p = tensor_parallel.vocab_parallel_cross_entropy(
+            ref_output_tensor_p = tensor_parallel.vocab_parallel_cross_entropy(
                             ref_output_p.contiguous().float(),
                             labels_p
                         ) # BUT THIS DID NOT WORK WITH 4 NODES - OOM ERROR for 7B model (but worked for 1B model on 2 nodes)
+            ref_logprobs_p = torch.exp(ref_output_tensor_p)
             # ref_logprobs_p = batch_seq_logprobs(ref_output_p, labels_p)
             # print(f'Computed preferred output_tensor: {ref_output_tensor_p}')
             print(f'Computed preferred logprobs: {ref_logprobs_p}')
