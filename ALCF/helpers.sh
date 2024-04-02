@@ -260,8 +260,14 @@ setData() {  # ---- [dfl: abbrv. for DATA_FILE_LIST] -------------------------
     elif [[ $(hostname) == x3* ]]; then
         # dfl_fallback="/eagle/datasets/dolma/data_file_list_reweighted.txt"
         dfl_fallback="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list.txt"
-        dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_u.txt"
-        dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_p.txt"
+        # dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_u.txt"
+        # dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_file_list_p.txt"
+        # dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_yeast_file_list_u.txt"
+        # dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_yeast_file_list_p.txt"
+        # dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_textseq_yeast_file_list_u.txt"
+        # dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_textseq_yeast_file_list_p.txt"
+        dfl_fallback_u="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_textseq_proteingym_indels_file_list_u.txt"
+        dfl_fallback_p="/lus/eagle/projects/RL-fold/gdharuman/Megatron-DeepSpeed/ultrafeedback_dataset/data_textseq_proteingym_indels_file_list_p.txt"
     else
         echo "Unknown hostname. Must manually specify DATA_FILE_LIST."
     fi
