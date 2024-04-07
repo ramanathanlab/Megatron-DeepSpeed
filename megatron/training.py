@@ -1461,6 +1461,13 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                      opt_param_scheduler)
             saved_checkpoint = True
 
+        if iteration % 100 == 0:
+            from generate_utils import generate_post_training
+            # prompts=["Pen is mightier than", "Nature is", "Pythagoras theorem", "Good morning", "Hello world"]
+            prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
+            tokens_to_generate = 700
+            generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
+
         # Exiting based on duration
         if args.exit_duration_in_mins:
             train_time = (time.time() - _TRAIN_START_TIME) / 60.0
