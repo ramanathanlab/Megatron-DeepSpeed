@@ -102,7 +102,7 @@ def get_forward_backward_func():
         else:
             forward_backward_func = forward_backward_pipelining_without_interleaving
     else:
-        print(f'On forward_backward_no_pipelining branch ..')
+        # print(f'On forward_backward_no_pipelining branch ..')
         forward_backward_func = forward_backward_no_pipelining
     return forward_backward_func
 
