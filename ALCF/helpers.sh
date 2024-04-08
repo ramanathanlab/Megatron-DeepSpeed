@@ -55,6 +55,7 @@ setParams() {
     # ------------------------------------------------------------------------
     export PP="${PP}"
     export TP="${TP}"
+    export OPT="${OPT:-adamw}"
     export HOSTFILE="${HOSTFILE:-${PBS_NODEFILE}}"
     export WORLD_SIZE=${WORLD_SIZE:-$(wc -l < "${HOSTFILE}")}
     # ---- Llama2 7B Config ------------------------------
