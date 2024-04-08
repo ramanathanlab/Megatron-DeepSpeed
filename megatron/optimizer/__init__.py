@@ -1,12 +1,13 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
 from deepspeed.accelerator import get_accelerator
-if get_accelerator().device_name() == 'cuda':
-    from apex.optimizers import FusedAdam as Adam
-    from apex.optimizers import FusedSGD as SGD
-else:
-    from torch.optim import Adam
-    from torch.optim import SGD
+# if get_accelerator().device_name() == 'cuda':
+#     from apex.optimizers import FusedAdam as Adam
+#     from apex.optimizers import FusedSGD as SGD
+# else:
+#     from torch.optim import Adam
+#     from torch.optim import SGD
+import torch
 
 from megatron import get_args
 
@@ -93,24 +94,37 @@ def get_megatron_optimizer(model,
                                        betas=(args.adam_beta1, args.adam_beta2),
                                        eps=args.adam_eps)
     else:
-        if args.optimizer == 'adam':
+        if str(args.optimizer).lower() == 'adamw':
+            optimizer = torch.optim.AdamW(
+                param_groups,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps
+            )
+        elif args.optimizer == 'adam':
             if args.ds_fused_adam:
                 global Adam
                 from deepspeed.ops.adam import FusedAdam
                 Adam = FusedAdam
-            optimizer = Adam(param_groups,
-                            lr=args.lr,
-                            weight_decay=args.weight_decay,
-                            betas=(args.adam_beta1, args.adam_beta2),
-                            eps=args.adam_eps)
+            else:
+                Adam = torch.optim.Adam
+            optimizer = Adam(
+                param_groups,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps
+            )
         elif args.optimizer == 'sgd':
-            optimizer = SGD(param_groups,
-                            lr=args.lr,
-                            weight_decay=args.weight_decay,
-                            momentum=args.sgd_momentum)
+            optimizer = torch.optim.SGD(
+                param_groups,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                momentum=args.sgd_momentum
+            )
         else:
-            raise Exception('{} optimizer is not supported.'.format(
-            args.optimizer))
+            raise Exception(f'{args.optimizer} optimizer is not supported.')
 
     if args.deepspeed:
         return optimizer
