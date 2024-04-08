@@ -545,7 +545,7 @@ def main():
                 model_provider,
                 ModelType.encoder_or_decoder,
                 forward_step,
-                # args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
+                args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
                 data_post_process=data_post_process
             )
 
@@ -556,7 +556,7 @@ def main():
             model_provider,
             ModelType.encoder_or_decoder,
             forward_step,
-            # args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
+            args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
             data_post_process=data_post_process
         )
 
@@ -565,8 +565,9 @@ def main():
     # prompts=["Pen is mightier than", "Nature is", "Pythagoras theorem", "Good morning", "Hello world"]
     # prompts=["A sequence", "A sequence", "A sequence", "A sequence", "A sequence"]
     # tokens_to_generate = 1000
-    prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
-    tokens_to_generate = 700
+    # prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
+    prompts=["Seq=<M", "Seq=<M"]
+    tokens_to_generate = 245
     generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
 
     return model
