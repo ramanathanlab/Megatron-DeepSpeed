@@ -166,6 +166,7 @@ def pretrain(train_valid_test_dataset_provider,
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
+    print_rank_0(f'get_parameters_in_billions(model): {get_parameters_in_billions(model)}')
 
     # Data stuff.
     timers('train/valid/test-data-iterators-setup', log_level=0).start(
@@ -1464,8 +1465,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         if iteration % 100 == 0:
             from generate_utils import generate_post_training
             # prompts=["Pen is mightier than", "Nature is", "Pythagoras theorem", "Good morning", "Hello world"]
-            prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
-            tokens_to_generate = 700
+            prompts=["Seq=<M", "Seq=<M"]
+            tokens_to_generate = 245
             generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
 
         # Exiting based on duration
