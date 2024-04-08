@@ -843,16 +843,16 @@ def main():
         # model_ref, _, _ = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder) # throwing assertion error
         model_ref = get_model(model_provider, ModelType.encoder_or_decoder) # works but does it load from a checkpoint or randomly initializes?
         # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
-        optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
-        opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
-        model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
-                                                                model=model_ref[0],
-                                                                optimizer=optimizer_2,
-                                                                args=args,
-                                                                lr_scheduler=opt_param_scheduler_2,
-                                                                mpu=mpu if args.no_pipeline_parallel else None,
-                                                                config=args.deepspeed_config_dict,
-                                                            )
+        # optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
+        # opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
+        # model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
+        #                                                         model=model_ref[0],
+        #                                                         optimizer=optimizer_2,
+        #                                                         args=args,
+        #                                                         lr_scheduler=opt_param_scheduler_2,
+        #                                                         mpu=mpu if args.no_pipeline_parallel else None,
+        #                                                         config=args.deepspeed_config_dict,
+        #                                                    )
         # model_ref, _, _, _ = deepspeed.initialize(
         #                         model=model_ref[0],
         #                         optimizer=None,
@@ -870,6 +870,31 @@ def main():
         #                             # moe_type=args.mlp_type
         #                             )
         # model_ref = engine.module
+        ds_config_ref_dict = args.deepspeed_config_dict.copy()
+        if 'zero_optimization' in ds_config_ref_dict:
+            print_rank_0(f'args.deepspeed_config_dict before: {args.deepspeed_config_dict}')
+            print_rank_0(f'ds_config_ref_dict before: {ds_config_ref_dict}')
+            del ds_config_ref_dict['zero_optimization']
+            del ds_config_ref_dict['optimizer']
+            # ds_config_ref_dict['train_batch_size'] = 16
+            del ds_config_ref_dict['train_batch_size']
+            print_rank_0(f'args.deepspeed_config_dict after: {args.deepspeed_config_dict}')
+            print_rank_0(f'ds_config_ref_dict after: {ds_config_ref_dict}')
+        # if 'zero_optimization' in args.deepspeed_config_dict:
+        #     print_rank_0(f'args.deepspeed_config_dict before: {args.deepspeed_config_dict}')
+        #     del args.deepspeed_config_dict['zero_optimization']
+        #     print_rank_0(f'args.deepspeed_config_dict after: {args.deepspeed_config_dict}')
+
+        model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
+            model=model_ref[0],
+            config=ds_config_ref_dict
+        )
+        print_rank_0(f'ref optimizer: {optimizer_2}')
+        print_rank_0(f'ref param scheduler: {opt_param_scheduler_2}')
+
+        print_rank_0(f'get_parameters_in_billions(model): {get_parameters_in_billions(model)}')
+        from sys import exit
+        exit()
 
 
         if isinstance(model_ref, deepspeed.PipelineEngine):
@@ -882,7 +907,8 @@ def main():
             assert model_ref.grid.get_data_parallel_rank() == mpu.get_data_parallel_rank()
 
         model_ref = [model_ref]
-        iteration2 = load_checkpoint(model_ref, optimizer_2, opt_param_scheduler_2) # THIS WORKED!! After commenting out assert args.consumed_train_samples == 0 in load_checkpoint()
+        # iteration2 = load_checkpoint(model_ref, optimizer_2, opt_param_scheduler_2) # THIS WORKED!! After commenting out assert args.consumed_train_samples == 0 in load_checkpoint()
+        iteration2 = load_checkpoint(model_ref, None, None)
 
         # THINGS THAT DID NOT WORK FOR LOADING FROM CHECKPOINT
         # model_ref, optimizer_ref, lr_scheduler_ref = load_model_weights_only(model_provider) # DID NOT WORK - train_batch_size is not equal to micro_batch_per_gpu * gradient_acc_step * world_size 32 != 8 * 1 * 8
@@ -1429,8 +1455,8 @@ def main():
             print_rank_0(f'prompts_plus_generations: {prompts_plus_generations}')
 
         if True:
-            prompts=["Pen is mightier than", "A sequence", "Pythagoras theorem", "A sequence", "Hello world"]
-            tokens_to_generate = 64
+            prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
+            tokens_to_generate = 500
             generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
 
         if False:
