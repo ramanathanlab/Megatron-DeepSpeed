@@ -52,8 +52,9 @@ export hfds="${HERE}/hostfile_deepspeed" && [ -f "${hfds}" ] || exit
 # --launcher_args='--pmi=pmix'
     # deepspeed --hostfile $hfds --launcher ${LAUNCHER} ${EXEC} \
     # ${launch_cmd} \
+        # deepspeed --hostfile $hfds --launcher MPICH --launcher_args="--pmi=pmix" ${EXEC} \
 run_cmd="
-    deepspeed --hostfile $hfds --launcher MPICH ${EXEC} \
+    ${DIST_LAUNCH} python ${EXEC} \
     --use-flash-attn-v2 \
     --$DTYPE \
     --num-workers 0 \
@@ -81,9 +82,8 @@ run_cmd="
     --eval-interval ${EVAL_INTERVAL} \
     --max-position-embeddings ${SEQ} \
     --micro-batch-size ${MICRO_BATCH} \
-    --data-file-list ${DATA_FILE_LIST} \
-    --data-file-list-u ${DATA_FILE_LIST_U} \
     --data-file-list-p ${DATA_FILE_LIST_P} \
+    --data-file-list-u ${DATA_FILE_LIST_U} \
     --tensor-model-parallel-size ${TP} \
     --global-batch-size ${GLOBAL_BATCH} \
     --pipeline-model-parallel-size ${PP} \
