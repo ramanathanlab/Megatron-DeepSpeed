@@ -63,7 +63,7 @@ setParams() {
     export HEADS=${HEADS:-32}
     export NLAYERS=${NLAYERS:-32}
     export HIDDEN=${HIDDEN:-4096}
-    export NUM_KV_HEAD=${NUM_KV_HEAD:-8}
+    export NUM_KV_HEAD=${NUM_KV_HEAD:-32}
     export FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-11008}
     # ---- Run Settings ----------------------------------
     export LR=${LR:-0.0003}
@@ -283,7 +283,7 @@ setData() {  # ---- [dfl: abbrv. for DATA_FILE_LIST] -------------------------
     dfl_stem=$(echo "${dfl}" | tr "\/" "\t" | awk '{print $NF}' | sed "s/\.txt//g")
     dcp="${HERE}/.cache/${dfl_stem}/index-cache"
     mkdir -p dcp
-    export DATA_FILE_LIST="${dfl}"
+    # export DATA_FILE_LIST="${dfl}"
     export DATA_FILE_LIST_U="${dflu}"
     export DATA_FILE_LIST_P="${dflp}"
     export NUM_DOCS="${ndocs}"
