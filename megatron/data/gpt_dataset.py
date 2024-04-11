@@ -371,6 +371,7 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
     desc += f"Sequence length {seq_length}\n"
     desc += f"Random seed {seed}\n"
     desc += f"Split {splits_string}\n"
+    print(f'desc: {desc}')
     desc_hash = hashlib.md5(desc.encode('utf-8')).hexdigest()
     desc_filename = desc_hash + ".dsc"
     doc_idx_filename = desc_hash + '_doc_idx.npy'
