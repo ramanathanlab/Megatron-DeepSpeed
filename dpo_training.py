@@ -44,7 +44,7 @@ from torch import nn
 import torch.nn.functional as F
 
 # from ezpz import get_logger
-from ezpz.dist import get_world_size, setup_wandb, get_rank
+from ezpz.dist import get_world_size, setup_wandb, get_rank, setup_torch
 
 # More imports
 from megatron.initialize import initialize_megatron
@@ -76,13 +76,16 @@ from megatron.checkpointing import save_checkpoint
 from megatron.utils import get_ltor_masks_and_position_ids
 from generate_utils import generate_post_training
 
-# RANK = setup_torch(
-#     backend='deepspeed',
-#     port='5432',
-# )
-RANK = get_rank()
+RANK = setup_torch(
+    backend='deepspeed',
+    port='5432',
+)
+# RANK = get_rank()
 WORLD_SIZE = get_world_size()
 LEVEL = "DEBUG" if RANK == 0 else "CRITICAL"
+
+# RANK = os.environ.get('RANK', "0")
+# WORLD_SIZE = os.environ.get('WORLD_SIZE', "1")
 
 WANDB_MODE = os.environ.get('WANDB_MODE', None)
 DISABLE_WANDB = (
@@ -827,6 +830,8 @@ def main():
         # model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder)
         model = get_model(model_provider, ModelType.encoder_or_decoder) # works but does it load from a checkpoint or randomly initializes?
         # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
+        args.deepspeed_config_dict['flops_profiler']['enabled'] = True
+        args.deepspeed_config_dict['flops_profiler']['profile_step'] = 5
         optimizer = get_megatron_optimizer(model, None, None, 1.0)
         opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
         model, optimizer, _, opt_param_scheduler = deepspeed.initialize(
@@ -870,6 +875,8 @@ def main():
         #                             # moe_type=args.mlp_type
         #                             )
         # model_ref = engine.module
+
+        # Without optimizer
         ds_config_ref_dict = args.deepspeed_config_dict.copy()
         if 'zero_optimization' in ds_config_ref_dict:
             print_rank_0(f'args.deepspeed_config_dict before: {args.deepspeed_config_dict}')
@@ -892,9 +899,9 @@ def main():
         print_rank_0(f'ref optimizer: {optimizer_2}')
         print_rank_0(f'ref param scheduler: {opt_param_scheduler_2}')
 
-        print_rank_0(f'get_parameters_in_billions(model): {get_parameters_in_billions(model)}')
-        from sys import exit
-        exit()
+        # print_rank_0(f'get_parameters_in_billions(model): {get_parameters_in_billions(model)}')
+        # from sys import exit
+        # exit()
 
 
         if isinstance(model_ref, deepspeed.PipelineEngine):
@@ -915,8 +922,8 @@ def main():
         # model_ref, optimizer_ref, lr_scheduler_ref = load_model_weights_only_modified(model_provider) # DID NOT WORK -     optimizer = FusedAdam(TypeError: FusedAdam.__init__() got an unexpected keyword argument 'beta1'
         # ----------------------------------------
 
-        if args.data_file_list_u is not None:
-            print(f'data files list unpreferred: {args.data_file_list_u}')
+        if args.data_file_list_p is not None:
+            print(f'data files list unpreferred: {args.data_file_list_p}')
 
             # Number of train/valid/test samples.
             if args.train_samples:
@@ -935,7 +942,7 @@ def main():
             train_val_test_num_samples = [train_samples,
                                         eval_iters * args.global_batch_size,
                                         test_iters * args.global_batch_size]
-            print_rank_0(f'train_val_test_num_samples: {train_val_test_num_samples}')
+            print_rank_0(f'train_val_test_num_samples_p: {train_val_test_num_samples}')
             # print(f'args.data_impl: {args.data_impl}')
             # print(f'args.split: {args.split}')
             # print(f'args.seq_length: {args.seq_length}')
@@ -945,31 +952,8 @@ def main():
             # print(f'args.test_data_path: {args.test_data_path}')
             # print(f'args.data_cache_path: {args.data_cache_path}')
 
-            files_u = []
-            with open(args.data_file_list_u, 'r') as flist:
-                for f in flist.readlines():
-                    w, fname = f.split()
-                    files_u.append(float(w))
-                    files_u.append(fname)
-            train_ds_u, valid_ds_u, test_ds_u = build_train_valid_test_datasets(
-            data_prefix=files_u,
-            data_impl=args.data_impl,
-            splits_string=args.split,
-            train_valid_test_num_samples=train_val_test_num_samples,
-            seq_length=args.seq_length,
-            seed=args.seed,
-            skip_warmup=True,
-            # skip_warmup=(not args.mmap_warmup),
-            train_data_prefix=args.train_data_path,
-            valid_data_prefix=args.valid_data_path,
-            test_data_prefix=args.test_data_path,
-            data_cache_path=args.data_cache_path)
-            print_rank_0("> finished creating unpreferred GPT datasets ...")
-
-        if args.data_file_list_p is not None:
-            print_rank_0(f'data files list preferred: {args.data_file_list_p}')
-
             files_p = []
+            os.makedirs(args.data_cache_path+"/p/", exist_ok=True)
             with open(args.data_file_list_p, 'r') as flist:
                 for f in flist.readlines():
                     w, fname = f.split()
@@ -987,7 +971,32 @@ def main():
             train_data_prefix=args.train_data_path,
             valid_data_prefix=args.valid_data_path,
             test_data_prefix=args.test_data_path,
-            data_cache_path=args.data_cache_path)
+            data_cache_path=args.data_cache_path+"/p/")
+            print_rank_0("> finished creating unpreferred GPT datasets ...")
+
+        if args.data_file_list_u is not None:
+            print_rank_0(f'data files list preferred: {args.data_file_list_u}')
+
+            files_u = []
+            os.makedirs(args.data_cache_path+"/u/", exist_ok=True)
+            with open(args.data_file_list_u, 'r') as flist:
+                for f in flist.readlines():
+                    w, fname = f.split()
+                    files_u.append(float(w))
+                    files_u.append(fname)
+            train_ds_u, valid_ds_u, test_ds_u = build_train_valid_test_datasets(
+            data_prefix=files_u,
+            data_impl=args.data_impl,
+            splits_string=args.split,
+            train_valid_test_num_samples=train_val_test_num_samples,
+            seq_length=args.seq_length,
+            seed=args.seed,
+            skip_warmup=True,
+            # skip_warmup=(not args.mmap_warmup),
+            train_data_prefix=args.train_data_path,
+            valid_data_prefix=args.valid_data_path,
+            test_data_prefix=args.test_data_path,
+            data_cache_path=args.data_cache_path+"/u/")
             print_rank_0("> finished creating preferred GPT datasets ...")
 
         # Data loaders
@@ -1016,6 +1025,7 @@ def main():
 
         print_rank_0(f'args.train_iters: {args.train_iters}')
         print_rank_0(f'args.save_interval: {args.save_interval}')
+        print_rank_0(f'get_parameters_in_billions(model): {get_parameters_in_billions(model)}')
         report_memory_flag = True
 
         # Train model
@@ -1456,7 +1466,7 @@ def main():
 
         if True:
             prompts=["A sequence identified as Seq=<MTEQKALVKRITNETKIQIAISLKGG", "The protein Seq=<MTEQKALVKRITNETKIQIAISLKGGPLA"]
-            tokens_to_generate = 500
+            tokens_to_generate = 400
             generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
 
         if False:
