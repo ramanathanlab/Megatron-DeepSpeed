@@ -913,8 +913,11 @@ def _add_training_args(parser):
     group.add_argument('--disable-bias-linear', action='store_false',
                        help='Disable bias in the linear layers',
                        dest='add_bias_linear')
+    # group.add_argument('--optimizer', type=str, default='adam',
+    #                    choices=['adam', 'sgd', 'adamw', ''],
+    #                    help='Optimizer function')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd'],
+                       choices=['adam', 'adamw', 'sgd', 'apex.adam', 'apex.sgd'],
                        help='Optimizer function')
     group.add_argument('--dataloader-type', type=str, default=None,
                        choices=['single', 'cyclic'],
