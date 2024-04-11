@@ -49,7 +49,7 @@ common="\
 flops_profiler="\
     \"flops_profiler\": {
       \"enabled\": true,
-      \"profile_step\": 45,
+      \"profile_step\": 5,
       \"module_depth\": -1,
       \"top_modules\": 1,
       \"detailed\": true,
