@@ -1,6 +1,6 @@
     {
         "train_micro_batch_size_per_gpu": 1,
-        "gradient_accumulation_steps": 16,
+        "gradient_accumulation_steps": 3,
         "steps_per_print": 1,
         "wall_clock_breakdown" : true,
         "zero_force_ds_cpu_optimizer": false,
@@ -49,6 +49,6 @@
 },
 "wandb": {
 "enabled": true,
-"project": "GenSLM-Megatron-DS"
+"project": "Megatron-DS"
 }
 }

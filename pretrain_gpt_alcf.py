@@ -183,7 +183,8 @@ def get_batch(data_iterator):
     tokens_ = data_b['text'].long()
     labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
-
+    print_rank_0(f'tokens shape: {tokens.size()}')
+    print_rank_0(f'tokens[0] : {tokens[0]}')
     # Get the masks and postition ids.
     skip_mask = args.use_flash_attn or args.use_flash_attn_triton
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(

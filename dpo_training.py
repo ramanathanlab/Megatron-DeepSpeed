@@ -102,7 +102,7 @@ if RANK == 0 and not DISABLE_WANDB:
     print('--------------------------------------------------')
     print(f"Setting up W&B from: {RANK} with {project_name}")
     print('--------------------------------------------------')
-    setup_wandb(project_name=project_name)
+    #setup_wandb(project_name=project_name)
 
 def model_provider(pre_process=True, post_process=True):
     """Build the model."""
@@ -838,6 +838,8 @@ def main():
                                                                 config=args.deepspeed_config_dict,
                                                             )
         model = [model]
+        print_rank_0(get_parameters_in_billions(model))
+        #exit()
 
         # ---------- Reference model -------------
         # model_ref, _, _ = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder) # throwing assertion error
@@ -1147,10 +1149,10 @@ def main():
                     averaged_rewards_iter.append(rewards.tolist())
 
                 if (i % args.save_interval == 0) and (i > 0) and (torch.distributed.get_rank() == 0):
-                    TPL = os.environ.get('TP')
+                    TPL = args.tensor_model_parallel_size
                     GRAD_ACC = os.environ.get('GRAD_ACC_STEPS')
                     print(f'Checkpointing loss and rewards at iteration {i} ..')
-                    np.savez(f'./runs/proteingym_indels/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
+                    np.savez(f'./runs/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_lr-{args.lr}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
 
             # if torch.distributed.get_rank() == 0:
             #     avg_loss_epoch.append(np.array(averaged_loss_iter).mean())
