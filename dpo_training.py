@@ -1167,7 +1167,7 @@ def main():
             # print(avg_rewards_epoch)
             # np.savez(f'./runs/proteingym_indels/loss-rewards_iters-{args.train_iters}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
 
-        # Generate - NOT WORKING
+        # Generate
         if False:
             model[0].eval()
             print_rank_0(f'Generation mode..')
@@ -1430,7 +1430,7 @@ def main():
 
             print_rank_0(f'prompts_plus_generations: {prompts_plus_generations}')
 
-        if True:
+        if False:
             prompts=["Pen is mightier than", "A sequence", "Pythagoras theorem", "A sequence", "Hello world"]
             tokens_to_generate = 64
             generated_responses = generate_post_training(model, prompts, tokens_to_generate, fprint=False)
