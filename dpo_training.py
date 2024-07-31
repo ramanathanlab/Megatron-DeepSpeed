@@ -45,6 +45,7 @@ import torch.nn.functional as F
 
 # from ezpz import get_logger
 from ezpz.dist import get_world_size, setup_wandb, get_rank
+from ezpz.history import summarize_dict
 
 # More imports
 from megatron.initialize import initialize_megatron
@@ -79,41 +80,36 @@ from generate_utils import generate_post_training
 import ezpz as ez
 import logging
 
-
-RANK = ez.setup_torch(
-    backend='deepspeed',
-    # port='5432',
-)
-# RANK = get_rank()
+# ---- [SETUP COMMS] ------------------------
+RANK = ez.setup_torch(backend="deepspeed")  # , timeout=7200)
 WORLD_SIZE = ez.get_world_size()
-LEVEL = "DEBUG" if RANK == 0 else "CRITICAL"
-
-WANDB_MODE = os.environ.get('WANDB_MODE', None)
-DISABLE_WANDB = (
-    WANDB_MODE is not None and str(WANDB_MODE).lower() == 'disabled'
-)
+LOCAL_RANK = ez.get_local_rank()
+DEVICE_TYPE = ez.dist.get_torch_device_type()
+if torch.cuda.is_available():
+    torch.cuda.set_device(LOCAL_RANK)
 
 log = logging.getLogger(__name__)
 LOG_LEVEL = str(os.environ.get("LOG_LEVEL", "INFO")).upper()
 # set logging level to "INFO" on RANK == 0, "CRITICAL" on all other ranks
 log.setLevel(LOG_LEVEL) if RANK == 0 else log.setLevel("CRITICAL")
 
-log.info('test: info')
-
+# ---- [SETUP WANDB FROM RANK 0] --------------
+WANDB_MODE = os.environ.get('WANDB_MODE', None)
+DISABLE_WANDB = (
+    WANDB_MODE is not None and str(WANDB_MODE).lower() == 'disabled'
+)
 if RANK == 0 and not DISABLE_WANDB:
     project_name = (
         os.environ.get(
-            'WB_PROJECT',
+            'WB_PROJECT',         # look for WB_PROJECT in env
             os.environ.get(
-                'WANDB_PROJECT',
-                'AuroraGPT'
+                'WANDB_PROJECT',  # look for WANDB_PROJECT in env
+                'Megatron-DS'
             ),
         )
     )
-    print('--------------------------------------------------')
-    print(f"Setting up W&B from: {RANK} with {project_name}")
-    print('--------------------------------------------------')
-    #setup_wandb(project_name=project_name)
+    log.info(f"Setting up W&B from: {RANK} with {project_name}")
+    _ = ez.setup_wandb(project_name=project_name)
 
 
 def num_floating_point_operations_dpo(args, batch_size):
@@ -926,7 +922,6 @@ def main():
         #                             )
         # model_ref = engine.module
 
-
         if isinstance(model_ref, deepspeed.PipelineEngine):
             print(f'Doing assertion checks on model_ref..')
             # hack to get batch_fn from pretrain_gpt.py
@@ -1056,10 +1051,11 @@ def main():
             avg_loss_epoch = []
             avg_rewards_epoch = []
 
-        throughput_metrics = {}
+        training_metrics = {}
+        gas = args.deepspeed_config_dict['gradient_accumulation_steps']
         for epoch in range(1):
             iteration = 0
-            for i in range(args.train_iters):
+            for train_iter in range(args.train_iters):
                 # Get batch
                 _td0 = time.perf_counter()  # tick: data start
                 timers = get_timers()
@@ -1139,47 +1135,25 @@ def main():
                 update_successful = model[0].was_step_applied()
                 log.info(f'update_successful: {update_successful}')
                 log.info(f'args.micro_batch_size: {args.micro_batch_size}')
-                throughput_metrics |= {
-                    'iteration': iteration,
-                    'dt_data': _tf0 - _td0,
-                    'dt_forward': _tf1 - _tf0,
-                    'dt_backward': _tb1 - _tf1,
-                    'dt_step': (dt_step :=_tb1 - _tf0),
-                    'num_flop_dpo': num_flop_dpo,
-                    'flops': (flops := (num_flop_dpo / dt_step)),
-                    'tflops': (tflops := flops / (10 ** 12)),
-                    'tflops_per_gpu': (tflops / args.world_size),
-                }
-                log.info(
-                    ' '.join([
-                        f'{k}={v:.4g}' for k, v in throughput_metrics.items()
-                    ])
-                )
-                if wandb is not None and getattr(wandb, 'run', None) is not None:
-                    wandb.log(throughput_metrics)
+                # Iteration updates
+                iteration += 1
+                args.iteration = iteration
+                # if train_iter % gas == 0:
                 # log.info(f'num_flops_dpo: {num_flops_dpo}, ')
                 # num_flop_lm = num_floating_point_operations(args, batch_size)
                 # num_flop_per_sec_lm = (num_flop_lm / elapsed_time_per_iteration)
                 # tflops_lm = (num_flop_per_sec_lm / (10 ** 12))
                 # tflops_lm_per_gpu = (tflops_lm / args.world_size)
-                # Iteration updates
-                iteration += 1
-                args.iteration = iteration
-                # print(f'args.consumed_train_samples: {args.consumed_train_samples}')
-                new_samples = mpu.get_data_parallel_world_size() * \
-                                            args.micro_batch_size * \
-                                            get_num_microbatches()
-                args.consumed_train_samples += new_samples
                 # print(f'args.consumed_train_samples: {args.consumed_train_samples}')
                 # Reduce loss for logging.
                 averaged_loss = average_losses_across_data_parallel_group([dloss])
                 loss_dict = {'loss': averaged_loss}
-                print_rank_0(f'iteration: {iteration}, dloss: {averaged_loss.detach().cpu().tolist()}')
+                # print_rank_0(f'iteration: {iteration}, dloss: {averaged_loss.detach().cpu().tolist()}')
                 psrewards_p = (0.1 * (seq_logps_p - rseq_logps_p)).detach()
                 psrewards_u = (0.1 * (seq_logps_u - rseq_logps_u)).detach()
                 psrewards = (psrewards_p > psrewards_u).float()
                 rewards = psrewards.cpu().mean()
-                print_rank_0(f'iteration: {iteration}, rewards: {rewards}')
+                # print_rank_0(f'iteration: {iteration}, rewards: {rewards}')
 
                 # wandb logging
                 # report_memory_flag = training_log_dpo(loss_dict, iteration, report_memory_flag)
@@ -1188,11 +1162,46 @@ def main():
                     averaged_loss_iter.append(averaged_loss.detach().cpu().tolist()[0])
                     averaged_rewards_iter.append(rewards.tolist())
 
-                if (i % args.save_interval == 0) and (i > 0) and (torch.distributed.get_rank() == 0):
+                if (train_iter % args.save_interval == 0) and (train_iter > 0) and (torch.distributed.get_rank() == 0):
                     TPL = args.tensor_model_parallel_size
                     GRAD_ACC = os.environ.get('GRAD_ACC_STEPS')
                     print(f'Checkpointing loss and rewards at iteration {i} ..')
                     np.savez(f'./runs/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_lr-{args.lr}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
+
+                training_metrics |= {
+                    'iteration': iteration,
+                    'loss': averaged_loss.item(),
+                    'rewards': rewards,
+                    'consumed_samples': args.consumed_train_samples,
+                    'consumed_tokens': args.consumed_train_tokens,
+                    'dt_data': _tf0 - _td0,
+                    'dt_forward': _tf1 - _tf0,
+                    'dt_backward': _tb1 - _tf1,
+                    'dt_step': (dt_step :=_tb1 - _tf0),
+                    'sps': (sps := batch_size / dt_step),
+                    'tps': (tps := sps * args.seq_length),
+                    'sps_per_gpu': sps / args.world_size,
+                    'tps_per_gpu': tps / args.world_size,
+                    'num_flop_dpo': num_flop_dpo,
+                    'flops': (flops := (num_flop_dpo / dt_step)),
+                    'tflops': (tflops := flops / (10 ** 12)),
+                    'tflops_per_gpu': (tflops / args.world_size),
+                }
+                try:
+                    summary = summarize_dict(training_metrics)
+                    log.info(summary)
+                    if wandb is not None and getattr(wandb, 'run', None) is not None:
+                        wandb.log({'training_metrics': training_metrics})
+                except Exception:
+                    log.info(' '.join([f'{k}={v}' for k, v in training_metrics.items()]))
+
+                # print(f'args.consumed_train_samples: {args.consumed_train_samples}')
+                new_samples = (
+                        mpu.get_data_parallel_world_size()
+                        * args.micro_batch_size
+                        * get_num_microbatches()
+                )
+                args.consumed_train_samples += new_samples
 
             # if torch.distributed.get_rank() == 0:
             #     avg_loss_epoch.append(np.array(averaged_loss_iter).mean())
