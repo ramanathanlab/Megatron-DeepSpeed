@@ -1229,45 +1229,6 @@ def main():
                     print(f'Checkpointing loss and rewards at iteration {i} ..')
                     np.savez(f'./runs/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_lr-{args.lr}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
 
-                # elapsed_time = timers("interval-time").elapsed(barrier=True)
-                # elapsed_time_per_iteration = elapsed_time / total_iterations
-                # seq_len = args.seq_length
-                # if hasattr(args, "actual_seq_length"):
-                #     seq_len = args.actual_seq_length
-                # samples_per_sec, tflops, approx_parameters_in_billions = throughput_calculator(
-                #     model, args, elapsed_time, total_iterations
-                # )
-                # samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
-                # tokens_per_sec = samples_per_sec * seq_len
-                # tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
-                # tokens_per_gpu_per_second = tokens_per_sec / args.world_size
-                # tokens_per_gpu_per_second_per_replica = (
-                #     tokens_per_gpu_per_second / args.data_parallel_size
-                # )
-                # # NOTE: [2024-06-19]
-                # # Updated to use (more accurate) calculation according to
-                # # `num_floating_point_operations` from NVIDIA/Megatron-LM
-                # num_flop_lm = num_floating_point_operations(args, batch_size)
-                # num_flop_per_sec_lm = (num_flop_lm / elapsed_time_per_iteration)
-                # tflops_lm = (num_flop_per_sec_lm / (10 ** 12))
-                # tflops_lm_per_gpu = (tflops_lm / args.world_size)
-                # wandb_metrics |= {
-                #     "throughput/iteration-time": elapsed_time_per_iteration,  # 1000 ms / s
-                #     "throughput/samples_per_sec": samples_per_sec,
-                #     "throughput/samples_per_sec_per_replica": samples_per_sec_per_replica,
-                #     "throughput/tokens_per_sec": tokens_per_sec,
-                #     "throughput/tokens_per_sec_per_replica": tokens_per_sec_per_replica,
-                #     "throughput/tokens_per_gpu_per_sec": tokens_per_gpu_per_second,
-                #     "throughput/tokens_per_gpu_per_sec_per_replica": tokens_per_gpu_per_second_per_replica,
-                #     "throughput/tflops": tflops,
-                #     "throughput/tflops-new": num_flop_lm / elapsed_time_per_iteration,
-                #     "throughput/tflops-lm": tflops_lm_per_gpu,
-                #     "throughput/approx_params_in_billions": approx_parameters_in_billions,
-                #     "throughput/elapsed_ms_per_iteration": elapsed_time_per_iteration,
-                #     "throughput/iteration": iteration,
-                # }
-
-
             # if torch.distributed.get_rank() == 0:
             #     avg_loss_epoch.append(np.array(averaged_loss_iter).mean())
             #     avg_rewards_epoch.append(np.array(averaged_rewards_iter).mean())
