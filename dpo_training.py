@@ -1056,11 +1056,12 @@ def main():
             avg_loss_epoch = []
             avg_rewards_epoch = []
 
+        throughput_metrics = {}
         for epoch in range(1):
             iteration = 0
             for i in range(args.train_iters):
                 # Get batch
-                _t0 = time.perf_counter()
+                _td0 = time.perf_counter()  # tick: data start
                 timers = get_timers()
                 timers('batch-generator-unpreferred', log_level=2).start()
                 tokens_u, labels_u, loss_mask_u, attention_mask_u, position_ids_u = get_batch(
@@ -1077,14 +1078,6 @@ def main():
                 # print(f'tokens shape: {tokens_u.shape}')
                 print_rank_0("> finished extracting batch of tokens, labels, attn mask etc. for pref train_data_iterator ...")
 
-                # Model forward
-                # output_tensor, other_losses = model[0](
-                #                                 tokens_u,
-                #                                 position_ids_u,
-                #                                 attention_mask_u,
-                #                                 labels=labels_u
-                #                             ) # OUT OF MEMORY ERROR even with 4 nodes
-
                 # Model forward with concatenated inputs
                 tokens_c = torch.cat((tokens_p,tokens_u), 0)
                 position_ids_c = torch.cat((position_ids_p,position_ids_u), 0)
@@ -1092,18 +1085,17 @@ def main():
                 loss_mask_c = torch.cat((loss_mask_p,loss_mask_u), 0)
 
                 # Logits and loss
+                _tf0 = time.perf_counter()  # tick: forward start
                 output_c, other_losses_c = model[0](
                                     tokens_c,
                                     position_ids_c,
                                     None,
                                     # labels=labels_u
                                 )
-
                 loss_c = tensor_parallel.vocab_parallel_cross_entropy(
                                 output_c.contiguous().float(),
                                 labels_c
                             )
-
                 # Reference model forward with concatenated inputs
                 with torch.no_grad():
                     # Logits and loss
@@ -1117,38 +1109,12 @@ def main():
                         routput_c.contiguous().float(),
                         labels_c
                     )
-
-                # # Print statements for debugging
-                # print(f'tokens_p: {tokens_p}')
-                # print(f'tokens_u: {tokens_u}')
-                # # print(f'output_p[0]: {output_p[0]}')
-                # # print(f'output_u[0]: {output_u[0]}')
-                # print(f'output_c[0]: {output_c[0]}')
-                # print(f'tokens_p shape: {tokens_p.size()}, tokens_u shape: {tokens_u.size()}')
-                # print(f'tokens_c shape: {tokens_c.size()}')
-                # print(f'position_ids_p shape: {position_ids_p.size()}, position_ids_u shape: {position_ids_u.size()}')
-                # print(f'position_ids_c shape: {position_ids_c.size()}')
-                # print(f'output_c shape: {output_c.size()}')
-                # print(f'loss_c shape: {loss_c.size()}')
-                # print(f'routput_c shape: {routput_c.size()}')
-                # print(f'rloss_c shape: {rloss_c.size()}')
-                # print(f'loss_mask_p shape: {loss_mask_p.size()}')
-                # print(f'loss_mask_u shape: {loss_mask_u.size()}')
-                # print(f'loss_mask_c shape: {loss_mask_c.size()}')
-                # print(f'attention_mask_u: {attention_mask_u}')
-                # print(f'loss_mask_p sum: {torch.sum(loss_mask_p), 8*4096}')# print(f'loss_mask_p shape: {loss_mask_p.size()}')
-
+                _tf1 = time.perf_counter()  # tock: forward stop
                 # Seq logprobs
                 seq_logps_p = torch.sum(loss_c[:args.micro_batch_size,:] * loss_mask_p, dim=-1) / torch.sum(loss_mask_p, dim=-1)
                 seq_logps_u = torch.sum(loss_c[args.micro_batch_size:,:] * loss_mask_u, dim=-1) / torch.sum(loss_mask_u, dim=-1)
                 rseq_logps_p = torch.sum(rloss_c[:args.micro_batch_size,:] * loss_mask_p, dim=-1) / torch.sum(loss_mask_p, dim=-1)
                 rseq_logps_u = torch.sum(rloss_c[args.micro_batch_size:,:] * loss_mask_u, dim=-1) / torch.sum(loss_mask_u, dim=-1)
-
-                # # Print statements for debugging
-                # print(f'seq_logps_p shape: {seq_logps_p.size()}')
-                # print(f'seq_logps_u shape: {seq_logps_u.size()}')
-                # print(f'rseq_logps_p shape: {rseq_logps_p.size()}')
-                # print(f'rseq_logps_u shape: {rseq_logps_u.size()}')
 
                 # Loss
                 pu_ratio = seq_logps_p - seq_logps_u
@@ -1161,30 +1127,29 @@ def main():
                 dloss = torch.mean(final)
                 # Model backward and update
                 model[0].backward(dloss)
-
-                increment = get_num_microbatches() * \
-                                            args.micro_batch_size * \
-                                            args.data_parallel_size
+                increment = (
+                    get_num_microbatches()
+                    * args.micro_batch_size
+                    * args.data_parallel_size
+                )
                 # print(f'increment: {increment}')
                 # model[0].step(lr_kwargs={'increment': increment})
                 model[0].step()
-                _t1 = time.perf_counter()
-                dt_step = _t1 - _t0
-                # elapsed_time = timers("interval-time").elapsed(barrier=True)
-                # elapsed_time_per_iteration = elapsed_time / i
+                _tb1 = time.perf_counter()
                 update_successful = model[0].was_step_applied()
-                print_rank_0(f'update_successful: {update_successful}')
-                throughput_metrics = {
+                log.info(f'update_successful: {update_successful}')
+                log.info(f'args.micro_batch_size: {args.micro_batch_size}')
+                throughput_metrics |= {
                     'iteration': iteration,
-                    'dt_step': dt_step,
-                    # 'elapsed_time': elapsed_time,
-                    # 'elapsed_time_per_iteration': elapsed_time_per_iteration,
+                    'dt_data': _tf0 - _td0,
+                    'dt_forward': _tf1 - _tf0,
+                    'dt_backward': _tb1 - _tf1,
+                    'dt_step': (dt_step :=_tb1 - _tf0),
                     'num_flop_dpo': num_flop_dpo,
                     'flops': (flops := (num_flop_dpo / dt_step)),
                     'tflops': (tflops := flops / (10 ** 12)),
                     'tflops_per_gpu': (tflops / args.world_size),
                 }
-                print_rank_0(f'args.micro_batch_size: {args.micro_batch_size}')
                 log.info(
                     ' '.join([
                         f'{k}={v:.4g}' for k, v in throughput_metrics.items()
