@@ -76,18 +76,29 @@ from megatron.checkpointing import save_checkpoint
 from megatron.utils import get_ltor_masks_and_position_ids
 from generate_utils import generate_post_training
 
-# RANK = setup_torch(
-#     backend='deepspeed',
-#     port='5432',
-# )
-RANK = get_rank()
-WORLD_SIZE = get_world_size()
+import ezpz as ez
+import logging
+
+
+RANK = ez.setup_torch(
+    backend='deepspeed',
+    # port='5432',
+)
+# RANK = get_rank()
+WORLD_SIZE = ez.get_world_size()
 LEVEL = "DEBUG" if RANK == 0 else "CRITICAL"
 
 WANDB_MODE = os.environ.get('WANDB_MODE', None)
 DISABLE_WANDB = (
     WANDB_MODE is not None and str(WANDB_MODE).lower() == 'disabled'
 )
+
+log = logging.getLogger(__name__)
+LOG_LEVEL = str(os.environ.get("LOG_LEVEL", "INFO")).upper()
+# set logging level to "INFO" on RANK == 0, "CRITICAL" on all other ranks
+log.setLevel(LOG_LEVEL) if RANK == 0 else log.setLevel("CRITICAL")
+
+log.info('test: info')
 
 if RANK == 0 and not DISABLE_WANDB:
     project_name = (
@@ -103,6 +114,39 @@ if RANK == 0 and not DISABLE_WANDB:
     print(f"Setting up W&B from: {RANK} with {project_name}")
     print('--------------------------------------------------')
     #setup_wandb(project_name=project_name)
+
+
+def num_floating_point_operations_dpo(args, batch_size):
+    assert args is not None
+    # Group Query Attention.
+    # if not args.group_query_attention:
+    if not args.num_key_value_heads:
+        args.num_key_value_heads = args.num_attention_heads
+        # args.num_query_groups = args.num_attention_heads
+    # MoE.
+    # num_experts_routed_to = 1 if args.num_experts is None else args.moe_router_topk
+    num_experts_routed_to = 1 if args.num_experts is None else args.topk
+    gated_linear_multiplier = 3 / 2 if args.swiglu else 1
+    return (
+        16
+        * batch_size
+        * args.seq_length
+        * args.num_layers
+        * args.hidden_size
+        * args.hidden_size
+        * (
+            1
+            + (
+                (args.ffn_hidden_size / args.hidden_size)
+                * num_experts_routed_to
+                * gated_linear_multiplier
+            )
+            + (args.num_key_value_heads / args.num_attention_heads)
+            + (args.seq_length / args.hidden_size)
+            + (args.padded_vocab_size / (2 * args.num_layers * args.hidden_size))
+        )
+    )
+
 
 def model_provider(pre_process=True, post_process=True):
     """Build the model."""
@@ -807,8 +851,17 @@ def main():
             set_jit_fusion_options()
 
         args = get_args()
+        assert args is not None
         timers = get_timers()
-
+        assert timers is not None
+        # Calculate batch size.
+        batch_size = (
+            args.micro_batch_size * args.data_parallel_size * get_num_microbatches()
+        )
+        num_flop_dpo = num_floating_point_operations_dpo(
+            args,
+            batch_size=batch_size,
+        )
         if args.deepspeed:
             args.deepspeed_config_dict = _create_ds_config_dict()
             if "curriculum_learning" in args.deepspeed_config_dict and \
@@ -1007,6 +1060,7 @@ def main():
             iteration = 0
             for i in range(args.train_iters):
                 # Get batch
+                _t0 = time.perf_counter()
                 timers = get_timers()
                 timers('batch-generator-unpreferred', log_level=2).start()
                 tokens_u, labels_u, loss_mask_u, attention_mask_u, position_ids_u = get_batch(
@@ -1085,7 +1139,6 @@ def main():
                 # print(f'loss_mask_p sum: {torch.sum(loss_mask_p), 8*4096}')# print(f'loss_mask_p shape: {loss_mask_p.size()}')
 
                 # Seq logprobs
-                print_rank_0(f'args.micro_batch_size: {args.micro_batch_size}')
                 seq_logps_p = torch.sum(loss_c[:args.micro_batch_size,:] * loss_mask_p, dim=-1) / torch.sum(loss_mask_p, dim=-1)
                 seq_logps_u = torch.sum(loss_c[args.micro_batch_size:,:] * loss_mask_u, dim=-1) / torch.sum(loss_mask_u, dim=-1)
                 rseq_logps_p = torch.sum(rloss_c[:args.micro_batch_size,:] * loss_mask_p, dim=-1) / torch.sum(loss_mask_p, dim=-1)
@@ -1106,7 +1159,6 @@ def main():
                 # print(f'final: {final}')
                 # dloss = torch.sum(final)
                 dloss = torch.mean(final)
-                
                 # Model backward and update
                 model[0].backward(dloss)
 
@@ -1116,9 +1168,35 @@ def main():
                 # print(f'increment: {increment}')
                 # model[0].step(lr_kwargs={'increment': increment})
                 model[0].step()
+                _t1 = time.perf_counter()
+                dt_step = _t1 - _t0
+                # elapsed_time = timers("interval-time").elapsed(barrier=True)
+                # elapsed_time_per_iteration = elapsed_time / i
                 update_successful = model[0].was_step_applied()
                 print_rank_0(f'update_successful: {update_successful}')
-
+                throughput_metrics = {
+                    'iteration': iteration,
+                    'dt_step': dt_step,
+                    # 'elapsed_time': elapsed_time,
+                    # 'elapsed_time_per_iteration': elapsed_time_per_iteration,
+                    'num_flop_dpo': num_flop_dpo,
+                    'flops': (flops := (num_flop_dpo / dt_step)),
+                    'tflops': (tflops := flops / (10 ** 12)),
+                    'tflops_per_gpu': (tflops / args.world_size),
+                }
+                print_rank_0(f'args.micro_batch_size: {args.micro_batch_size}')
+                log.info(
+                    ' '.join([
+                        f'{k}={v:.4g}' for k, v in throughput_metrics.items()
+                    ])
+                )
+                if wandb is not None and getattr(wandb, 'run', None) is not None:
+                    wandb.log(throughput_metrics)
+                # log.info(f'num_flops_dpo: {num_flops_dpo}, ')
+                # num_flop_lm = num_floating_point_operations(args, batch_size)
+                # num_flop_per_sec_lm = (num_flop_lm / elapsed_time_per_iteration)
+                # tflops_lm = (num_flop_per_sec_lm / (10 ** 12))
+                # tflops_lm_per_gpu = (tflops_lm / args.world_size)
                 # Iteration updates
                 iteration += 1
                 args.iteration = iteration
@@ -1126,11 +1204,8 @@ def main():
                 new_samples = mpu.get_data_parallel_world_size() * \
                                             args.micro_batch_size * \
                                             get_num_microbatches()
-
-                
                 args.consumed_train_samples += new_samples
                 # print(f'args.consumed_train_samples: {args.consumed_train_samples}')
-
                 # Reduce loss for logging.
                 averaged_loss = average_losses_across_data_parallel_group([dloss])
                 loss_dict = {'loss': averaged_loss}
@@ -1153,6 +1228,45 @@ def main():
                     GRAD_ACC = os.environ.get('GRAD_ACC_STEPS')
                     print(f'Checkpointing loss and rewards at iteration {i} ..')
                     np.savez(f'./runs/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_lr-{args.lr}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
+
+                # elapsed_time = timers("interval-time").elapsed(barrier=True)
+                # elapsed_time_per_iteration = elapsed_time / total_iterations
+                # seq_len = args.seq_length
+                # if hasattr(args, "actual_seq_length"):
+                #     seq_len = args.actual_seq_length
+                # samples_per_sec, tflops, approx_parameters_in_billions = throughput_calculator(
+                #     model, args, elapsed_time, total_iterations
+                # )
+                # samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
+                # tokens_per_sec = samples_per_sec * seq_len
+                # tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
+                # tokens_per_gpu_per_second = tokens_per_sec / args.world_size
+                # tokens_per_gpu_per_second_per_replica = (
+                #     tokens_per_gpu_per_second / args.data_parallel_size
+                # )
+                # # NOTE: [2024-06-19]
+                # # Updated to use (more accurate) calculation according to
+                # # `num_floating_point_operations` from NVIDIA/Megatron-LM
+                # num_flop_lm = num_floating_point_operations(args, batch_size)
+                # num_flop_per_sec_lm = (num_flop_lm / elapsed_time_per_iteration)
+                # tflops_lm = (num_flop_per_sec_lm / (10 ** 12))
+                # tflops_lm_per_gpu = (tflops_lm / args.world_size)
+                # wandb_metrics |= {
+                #     "throughput/iteration-time": elapsed_time_per_iteration,  # 1000 ms / s
+                #     "throughput/samples_per_sec": samples_per_sec,
+                #     "throughput/samples_per_sec_per_replica": samples_per_sec_per_replica,
+                #     "throughput/tokens_per_sec": tokens_per_sec,
+                #     "throughput/tokens_per_sec_per_replica": tokens_per_sec_per_replica,
+                #     "throughput/tokens_per_gpu_per_sec": tokens_per_gpu_per_second,
+                #     "throughput/tokens_per_gpu_per_sec_per_replica": tokens_per_gpu_per_second_per_replica,
+                #     "throughput/tflops": tflops,
+                #     "throughput/tflops-new": num_flop_lm / elapsed_time_per_iteration,
+                #     "throughput/tflops-lm": tflops_lm_per_gpu,
+                #     "throughput/approx_params_in_billions": approx_parameters_in_billions,
+                #     "throughput/elapsed_ms_per_iteration": elapsed_time_per_iteration,
+                #     "throughput/iteration": iteration,
+                # }
+
 
             # if torch.distributed.get_rank() == 0:
             #     avg_loss_epoch.append(np.array(averaged_loss_iter).mean())
