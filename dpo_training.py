@@ -823,6 +823,11 @@ def main():
             if "compression_training" in args.deepspeed_config_dict:
                 args.compression_training = True
 
+        from copy import deepcopy
+        ds_config_copy = deepcopy(args.deepspeed_config_dict)
+        ds_config_copy["flops_profiler"]["output_file"] = f"dsflops_nlayer{args.num_layers}_worldsize{WORLD_SIZE}_seq{args.seq_length}_mb{args.micro_batch_size}.log"
+        print_rank_0(f'Deepspeed config updated with out: {ds_config_copy["flops_profiler"]}')
+
         # model = model_provider()
         # model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder)
         model = get_model(model_provider, ModelType.encoder_or_decoder) # works but does it load from a checkpoint or randomly initializes?
