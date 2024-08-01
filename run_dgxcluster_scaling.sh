@@ -68,12 +68,12 @@ srun --mpi=pmix --nodes $SLURM_NNODES --gpus-per-node 8 --ntasks-per-node=8 --co
    --use-checkpoint-opt_param-scheduler --lr 5e-6 --seq-length 512 \
    --save checkpoints/ds_stage2_nl6_hs4096_mb24_seq1024_gb48_pp1_tp2_fp16 \
    --load checkpoints/ds_stage2_nl6_hs4096_mb24_seq1024_gb48_pp1_tp2_fp16 \
-   --num-layers 32 --hidden-size 4096 --train-iters 5000 --eval-iters 10 \
-   --distributed-backend nccl --num-attention-heads 32 --save-interval 10 \
-   --eval-interval 50000 --max-position-embeddings 4096 --micro-batch-size 12 \
-   --data-file-list-p ALCF/data_textseq_p.txt \
-   --data-file-list-u ALCF/data_textseq_u.txt \
-   --tensor-model-parallel-size 8 --pipeline-model-parallel-size 1 \
+   --num-layers 32 --hidden-size 4096 --train-iters 100 --eval-iters 10 \
+   --distributed-backend nccl --num-attention-heads 32 --save-interval 2000 \
+   --eval-interval 50000 --max-position-embeddings 4096 --micro-batch-size 2 \
+   --data-file-list-p ALCF/data_textseq_p_all.txt \
+   --data-file-list-u ALCF/data_textseq_u_all.txt \
+   --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 \
    --num-key-value-heads 32 --data-cache-path ./index-cache \
    --ffn-hidden-size 11008 --tokenizer-model ALCF/tokenizer.model \
    --no-query-key-layer-scaling --use-rotary-position-embeddings \
