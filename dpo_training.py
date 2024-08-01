@@ -1,6 +1,6 @@
 # Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
 
-"""Pretrain GPT"""
+"""Direct Preference Optimization"""
 
 import os
 from rich import print
@@ -849,17 +849,17 @@ def main():
         # ---------- Reference model -------------
         # model_ref, _, _ = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder) # throwing assertion error
         model_ref = get_model(model_provider, ModelType.encoder_or_decoder) # works but does it load from a checkpoint or randomly initializes?
-        # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
-        optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
-        opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
-        model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
-                                                                model=model_ref[0],
-                                                                optimizer=optimizer_2,
-                                                                args=args,
-                                                                lr_scheduler=opt_param_scheduler_2,
-                                                                mpu=mpu if args.no_pipeline_parallel else None,
-                                                                config=args.deepspeed_config_dict,
-                                                            )
+        # # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
+        # optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
+        # opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
+        # model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
+        #                                                         model=model_ref[0],
+        #                                                         optimizer=optimizer_2,
+        #                                                         args=args,
+        #                                                         lr_scheduler=opt_param_scheduler_2,
+        #                                                         mpu=mpu if args.no_pipeline_parallel else None,
+        #                                                         config=args.deepspeed_config_dict,
+        #                                                     )
         # model_ref, _, _, _ = deepspeed.initialize(
         #                         model=model_ref[0],
         #                         optimizer=None,
@@ -878,7 +878,29 @@ def main():
         #                             )
         # model_ref = engine.module
 
-
+        # deepspeed initialization of reference model without optimizer
+        ds_config_ref_dict = args.deepspeed_config_dict.copy()
+        if 'zero_optimization' in ds_config_ref_dict:
+            print_rank_0(f'args.deepspeed_config_dict before: {args.deepspeed_config_dict}')
+            print_rank_0(f'ds_config_ref_dict before: {ds_config_ref_dict}')
+            if 'zero_optimization' in ds_config_ref_dict.keys():
+                del ds_config_ref_dict['zero_optimization']
+            if 'optimizer' in ds_config_ref_dict.keys():
+                del ds_config_ref_dict['optimizer']
+            if 'train_batch_size' in ds_config_ref_dict.keys():
+                del ds_config_ref_dict['train_batch_size']
+            print_rank_0(f'args.deepspeed_config_dict after: {args.deepspeed_config_dict}')
+            print_rank_0(f'ds_config_ref_dict after: {ds_config_ref_dict}')
+        
+        model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
+                                                                model=model_ref[0],
+                                                                config=ds_config_ref_dict
+                                                            )
+        print_rank_0(f'ref optimizer: {optimizer_2}')
+        print_rank_0(f'ref param scheduler: {opt_param_scheduler_2}')
+        assert optimizer_2 == None, "Reference model optimizer is not None"
+        assert opt_param_scheduler_2 == None, "Reference param scheduler is not None"
+        
         if isinstance(model_ref, deepspeed.PipelineEngine):
             print(f'Doing assertion checks on model_ref..')
             # hack to get batch_fn from pretrain_gpt.py
