@@ -1,0 +1,16 @@
+image = "/capstor/scratch/cscs/gdharuma/enroot/megds.sqsh"
+mounts = ["/capstor", "/users"]
+workdir = "/capstor/scratch/cscs/gdharuma/Megatron-DeepSpeed"
+writable = true
+  
+[annotations]
+com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "cuda12"
+  
+[env]
+FI_CXI_DISABLE_HOST_REGISTER = "1"
+FI_MR_CACHE_MONITOR = "userfaultfd"
+NVIDIA_VISIBLE_DEVICES="all"
+NVIDIA_DRIVER_CAPABILITIES="compute,utility"
+NCCL_DEBUG = "WARN"
+FI_CXI_RX_MATCH_MODE = "software"
