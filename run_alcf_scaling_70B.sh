@@ -11,17 +11,17 @@ install_deepspeed() {
   fi
 }
 
-export MODEL_SIZE="3p5B"
+export MODEL_SIZE="70B"
 
 export PP=1
-export TP=1
+export TP=4
 export SEQ_LEN=512
-export NUM_LAYERS=16
-export NUM_KV_HEADS=32
-export HIDDEN_SIZE=4096
-export FFN_HIDDEN_SIZE=11008
-export NUM_ATTENTION_HEADS=32
-export MAX_POSITION_EMBEDDINGS=4096
+export NUM_LAYERS=80
+export NUM_KV_HEADS=8
+export HIDDEN_SIZE=8192
+export FFN_HIDDEN_SIZE=28672
+export NUM_ATTENTION_HEADS=64
+export MAX_POSITION_EMBEDDINGS=1024
 
 export DS_CONFIG="ds_configs/${MODEL_SIZE}.json"
 export ZERO_STAGE=$(cat "${DS_CONFIG}" | grep "stage" | sed "s/\,.*//g" | awk '{print $NF}')

@@ -1,70 +1,108 @@
 #!/bin/bash --login
 
+install_deepspeed() {
+  _deepspeed_dir="${PBS_O_WORKDIR}/deps/DeepSpeed"
+  if [[ ! -d "${_deepspeed_dir}" ]]; then
+    mkdir $(dirname "${_deepspeed_dir}")
+    git clone https://github.com/microsoft/DeepSpeed "${_deepspeed_dir}"
+    cd "${_deepspeed_dir}"
+    bash install.sh |& tee install.log
+    cd -
+  fi
+}
+
+export MODEL_SIZE="7B"
+
+export PP=1
+export TP=2
+export SEQ_LEN=512
+export NUM_LAYERS=32
+export NUM_KV_HEADS=32
+export HIDDEN_SIZE=4096
+export FFN_HIDDEN_SIZE=11008
+export NUM_ATTENTION_HEADS=32
+export MAX_POSITION_EMBEDDINGS=4096
+
+export DS_CONFIG="ds_configs/${MODEL_SIZE}.json"
+export ZERO_STAGE=$(cat "${DS_CONFIG}" | grep "stage" | sed "s/\,.*//g" | awk '{print $NF}')
+export MICRO_BATCH=$(cat "${DS_CONFIG}" | grep "micro_batch" | sed "s/\,.*//g" | awk '{print $NF}')
+
+export NOW="$(date "+%Y-%m-%d-%H%M%S")"
+export LOGFILE="logs/dpo_training_${MODEL_SIZE}_${NOW}.log"
+export CHECKPOINT_DIR="checkpoints/${MODEL_SIZE}_ds_stage${ZERO_STAGE}_nl${NUM_LAYERS}_hs${HIDDEN_SIZE}_mb${MICRO_BATCH}_seq${SEQ_LEN}_pp${PP}_tp${TP}_bf16"
+mkdir -p "${CHECKPOINT_DIR}"
 
 cd "${PBS_O_WORKDIR}" || exit
 
-NOW="$(date "+%Y-%m-%d-%H%M%S")"
+# [ezpz] ########################################################
+_ezpz_dir="${PBS_O_WORKDIR}/deps/ezpz"
+if [[ ! -d "${_ezpz_dir}" ]]; then
+  mkdir $(dirname "${_ezpz_dir}")
+  git clone https://github.com/saforem2/ezpz "${_ezpz_dir}"
+fi
 
-source "${PBS_O_WORKDIR}/deps/ezpz/src/ezpz/bin/utils.sh" || exit
-ezpz_setup_python || exit
-ezpz_setup_alcf "$@" || exit
+source "${_ezpz_dir}/src/ezpz/bin/utils.sh" || exit
+ezpz_setup_python |& tee --append "${LOGFILE}" || exit
+ezpz_setup_alcf "$@" |& tee --append "${LOGFILE}" || exit
+#################################################################
 
-TP="${TP:-4}"
-
-CHECKPOINT_DIR="checkpoints/ds_stage2_nl32_hs4096_mb2_seq512_pp1_tp${TP}_bf16"
-mkdir -p "${CHECKPOINT_DIR}"
+# [deepspeed] ############################
+if [[ -z $(command -v deepspeed) ]]; then
+  install_deepspeed || exit
+fi
+##########################################
 
 export WORLD_SIZE="${NGPUS}"
-run_cmd="${DIST_LAUNCH} python3 dpo_training.py \
- --bf16 \
- --split 100,0,0 \
- --log-interval 1  \
- --no-bias-gelu-fusion  \
- --lr-decay-style cosine \
- --no-bias-dropout-fusion \
- --no-masked-softmax-fusion \
- --tokenizer-type Llama2Tokenizer \
- --no-gradient-accumulation-fusion \
- --accumulate-allreduce-grads-in-fp32 \
- --use-checkpoint-opt_param-scheduler \
- --lr 5e-6 \
- --seq-length 512 \
- --save ${CHECKPOINT_DIR} \
- --load ${CHECKPOINT_DIR} \
- --num-layers 32 \
- --hidden-size 4096 \
- --train-iters 5000 \
- --eval-iters 10 \
- --distributed-backend ccl \
- --num-attention-heads 32 \
- --save-interval 5000 \
- --eval-interval 50000 \
- --max-position-embeddings 4096 \
- --micro-batch-size 2 \
- --data-file-list-p ALCF/data_p.txt \
- --data-file-list-u ALCF/data_u.txt \
- --tensor-model-parallel-size ${TP} \
- --pipeline-model-parallel-size 1 \
- --num-key-value-heads 32 \
- --data-cache-path ./index-cache \
- --ffn-hidden-size 11008 \
- --tokenizer-model ALCF/tokenizer.model \
- --no-query-key-layer-scaling \
- --use-rotary-position-embeddings \
- --untie-embeddings-and-output-weights \
- --swiglu \
- --normalization rmsnorm \
- --disable-bias-linear \
- --zero-stage=2 \
- --deepspeed_config=ds_config-gpt.json \
- --no-pipeline-parallel \
- --deepspeed \
- --optimizer adamw"
+run_cmd="${DIST_LAUNCH} python3 -Wignore dpo_training.py \
+  --seq-length ${SEQ_LEN} \
+  --save ${CHECKPOINT_DIR} \
+  --load ${CHECKPOINT_DIR} \
+  --num-layers ${NUM_LAYERS} \
+  --hidden-size ${HIDDEN_SIZE} \
+  --micro-batch-size ${MICRO_BATCH} \
+  --tensor-model-parallel-size ${TP} \
+  --pipeline-model-parallel-size ${PP} \
+  --ffn-hidden-size ${FFN_HIDDEN_SIZE} \
+  --num-key-value-heads ${NUM_KV_HEADS} \
+  --num-attention-heads ${NUM_ATTENTION_HEADS} \
+  --max-position-embeddings ${MAX_POSITION_EMBEDDINGS} \
+  --zero-stage=${ZERO_STAGE} \
+  --use-flash-attn-builder \
+  --deepspeed_config=${DS_CONFIG} \
+  --attention-dropout 0 \
+  --hidden-dropout 0 \
+  --bf16 \
+  --split 100,0,0 \
+  --log-interval 1  \
+  --no-bias-gelu-fusion  \
+  --lr-decay-style cosine \
+  --no-bias-dropout-fusion \
+  --no-masked-softmax-fusion \
+  --tokenizer-type Llama2Tokenizer \
+  --no-gradient-accumulation-fusion \
+  --accumulate-allreduce-grads-in-fp32 \
+  --use-checkpoint-opt_param-scheduler \
+  --lr 5e-6 \
+  --train-iters 5000 \
+  --eval-iters 10 \
+  --distributed-backend ccl \
+  --save-interval 5000 \
+  --eval-interval 50000 \
+  --data-file-list-p ALCF/data_p.txt \
+  --data-file-list-u ALCF/data_u.txt \
+  --data-cache-path ./index-cache \
+  --tokenizer-model ALCF/tokenizer.model \
+  --no-query-key-layer-scaling \
+  --use-rotary-position-embeddings \
+  --untie-embeddings-and-output-weights \
+  --swiglu \
+  --normalization rmsnorm \
+  --disable-bias-linear \
+  --no-pipeline-parallel \
+  --deepspeed \
+  --optimizer adamw"
 
-
-LOGFILE="dpo_training_${NOW}.log"
-
-echo "Writing to ${LOGFILE}"
-echo "CHECKPOINT_DIR: ${CHECKPOINT_DIR}"
-echo "${run_cmd}" > "${LOGFILE}"
-eval "${run_cmd}" |& tee "${LOGFILE}"
+echo "Writing to ${LOGFILE}" |& tee --append "${LOGFILE}"
+echo "CHECKPOINT_DIR: ${CHECKPOINT_DIR}" |& tee --append "${LOGFILE}"
+printf "run_cmd: %s\n" "${run_cmd}" |& tee --append "${LOGFILE}"
+eval "${run_cmd}" |& tee --append "${LOGFILE}"
