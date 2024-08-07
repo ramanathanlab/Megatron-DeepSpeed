@@ -69,10 +69,9 @@ srun -l \
     --cpu-bind=rank_ldom \
     --nodes $SLURM_NNODES \
     --ntasks-per-node=4 \
-    --uenv="/capstor/scratch/cscs/boeschf/images/pytorch-2.3.1-megatron_deepspeed_0.squashfs" \
+    --uenv="/capstor/scratch/cscs/boeschf/images/pytorch-2.3.1-megatron_deepspeed.squashfs" \
     bash -c "
     uenv view default
-    . ./.venv/bin/activate
     python dpo_training.py \
     --use-flash-attn-v2 --fp16 --split 100,0,0 \
     --log-interval 1 --no-bias-gelu-fusion \
@@ -95,3 +94,4 @@ srun -l \
     --normalization rmsnorm --disable-bias-linear \
     --zero-stage=1 --deepspeed_config=ds_config-gpt_nooffload.json \
     --no-pipeline-parallel --deepspeed --optimizer adamw
+    "
