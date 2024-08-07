@@ -7,11 +7,11 @@ from rich import print
 import torch
 import math
 import numpy as np
+import json
+import logging
 
 # The earliest we can measure the start time.
 import time
-from datetime import datetime
-import threading
 
 from functools import partial
 from megatron import get_args
@@ -22,19 +22,19 @@ from megatron.core import mpu, tensor_parallel
 from megatron.core.enums import ModelType
 from megatron.data.gpt_dataset import build_train_valid_test_datasets
 from megatron.model import GPTModel, GPTModelPipe
-from megatron.training import pretrain
+# from megatron.training import pretrain
 from megatron.utils import get_ltor_masks_and_position_ids
 from megatron.utils import (
     average_losses_across_data_parallel_group,
     update_rotary_pos_emb,
 )
 from megatron.arguments import core_transformer_config_from_args
-from megatron.utils import (
-    report_memory,
-    throughput_calculator,
-    checkpoint_throughput_calculator,
-)
-from pathlib import Path
+# from megatron.utils import (
+#     # report_memory,
+#     # throughput_calculator,
+#     # checkpoint_throughput_calculator,
+# )
+# from pathlib import Path
 
 import deepspeed
 from deepspeed.runtime.utils import see_memory_usage
@@ -42,18 +42,13 @@ from deepspeed.accelerator.real_accelerator import get_accelerator
 import subprocess
 import wandb
 
-import time
 from torch import nn
 import torch.nn.functional as F
-
-# from ezpz import get_logger
-from ezpz.dist import get_world_size, setup_wandb, get_rank
-from ezpz.history import summarize_dict
 
 # More imports
 from megatron.initialize import initialize_megatron
 from megatron.initialize import set_jit_fusion_options
-from megatron.training import print_datetime, _create_ds_config_dict
+from megatron.training import _create_ds_config_dict
 from megatron.training import setup_model_and_optimizer
 from megatron.training import load_model_weights_only, get_model
 from megatron.training import load_model_weights_only_modified
@@ -85,7 +80,7 @@ from megatron.utils import get_ltor_masks_and_position_ids
 from generate_utils import generate_post_training
 
 import ezpz as ez
-import logging
+from ezpz.history import summarize_dict
 
 # ---- [SETUP COMMS] ------------------------
 RANK = ez.setup_torch(backend="deepspeed")  # , timeout=7200)
@@ -127,7 +122,7 @@ def num_floating_point_operations_dpo(args, batch_size):
     num_experts_routed_to = 1 if args.num_experts is None else args.topk
     gated_linear_multiplier = 3 / 2 if args.swiglu else 1
     return (
-        16
+        16  # 4 + 8 + 4 + 4
         * batch_size
         * args.seq_length
         * args.num_layers
@@ -149,13 +144,13 @@ def num_floating_point_operations_dpo(args, batch_size):
 
 def model_provider(pre_process=True, post_process=True):
     """Build the model."""
-    print_rank_0("building GPT model ...")
+    log.info("building GPT model ...")
     see_memory_usage("Before Building Model", force=True)
     args = get_args()
     assert args is not None
     config = core_transformer_config_from_args(args)
     if wandb.run is not None:
-        print(f"Updating WandB run: [{wandb.run.name}]({wandb.run.url})")
+        log.info(f"Updating WandB run: [{wandb.run.name}]({wandb.run.url})")
         wandb.run.config.update({"args": vars(args)}, allow_val_change=True)
     if RANK == 0:
         git_ds_info()
@@ -167,7 +162,7 @@ def model_provider(pre_process=True, post_process=True):
         dpg = None
     if wandb is not None and wandb.run is not None:
         assert wandb is not None and wandb.run is not None
-        print(f"Updating {wandb.run.name=} at {wandb.run.url=}")
+        log.info(f"Updating {wandb.run.name=} at {wandb.run.url=}")
         wandb.run.config.update({"args": vars(args)}, allow_val_change=True)
     with deepspeed.zero.Init(
         data_parallel_group=dpg,
@@ -210,7 +205,7 @@ def model_provider(pre_process=True, post_process=True):
                 update_rotary_pos_emb(args.seq_length)
 
         else:
-            print(f"Building model check..")
+            log.info(f"Building model check..")
             model = GPTModel(
                 config=config,
                 num_tokentypes=0,
@@ -219,12 +214,12 @@ def model_provider(pre_process=True, post_process=True):
                 post_process=post_process,
             )
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # print_rank_0('\n ------------------------ ')
-    # print_rank_0(f'num of parameters {num_params}')
-    # print_rank_0('------------------------\n ')
-    print_rank_0(80 * "-")
-    print_rank_0(f"Number of parameters in model: {num_params}")
-    print_rank_0(80 * "-")
+    # log.info('\n ------------------------ ')
+    # log.info(f'num of parameters {num_params}')
+    # log.info('------------------------\n ')
+    log.info(80 * "-")
+    log.info(f"Number of parameters in model: {num_params}")
+    log.info(80 * "-")
     see_memory_usage("After Building Model", force=True)
     if wandb.run is not None:
         wandb.run.config.update({"num_params": num_params}, allow_val_change=True)
@@ -451,7 +446,7 @@ def loss_func(loss_mask, moe_loss, mos_loss, output_tensor):
                 "moe loss": moe_loss,
                 "kd loss": mos_loss,
             }
-        print_rank_0(
+        log.info(
             f">>> total loss: {loss}, "
             f"lm loss {averaged_loss[0]}, "
             f"kd loss {mos_loss}"
@@ -489,7 +484,7 @@ def dpo_loss_func(loss_mask, dpo_loss, output_tensor):
                 "moe loss": moe_loss,
                 "kd loss": mos_loss,
             }
-        print_rank_0(
+        log.info(
             f">>> total loss: {loss}, "
             f"lm loss {averaged_loss[0]}, "
             f"kd loss {mos_loss}"
@@ -749,7 +744,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
     args = get_args()
     assert args is not None
 
-    print_rank_0("> building train, validation, and test datasets " "for GPT ...")
+    log.info("> building train, validation, and test datasets " "for GPT ...")
     files = []
     if args.data_file_list is not None:
         with open(args.data_file_list, "r") as flist:
@@ -765,7 +760,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
                 files.append(path + f.split(".bin")[0])
     else:
         files = args.data_path
-    print_rank_0(f"file list {files}")
+    log.info(f"file list {files}")
     train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
         data_prefix=files,
         data_impl=args.data_impl,
@@ -780,7 +775,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
         test_data_prefix=args.test_data_path,
         data_cache_path=args.data_cache_path,
     )
-    print_rank_0("> finished creating GPT datasets ...")
+    log.info("> finished creating GPT datasets ...")
 
     return train_ds, valid_ds, test_ds
 
@@ -812,7 +807,7 @@ def git_ds_info():
     else:
         git_hash = "unknown"
         git_branch = "unknown"
-    print(
+    log.info(
         f"**** Git info for Megatron: "
         f"git_hash={git_hash} git_branch={git_branch} ****"
     )
@@ -883,9 +878,14 @@ def main():
                 args.compression_training = True
 
         from copy import deepcopy
+
         ds_config_copy = deepcopy(args.deepspeed_config_dict)
-        ds_config_copy["flops_profiler"]["output_file"] = f"dsflops_nlayer{args.num_layers}_worldsize{WORLD_SIZE}_seq{args.seq_length}_mb{args.micro_batch_size}.log"
-        print_rank_0(f'Deepspeed config updated with out: {ds_config_copy["flops_profiler"]}')
+        ds_config_copy["flops_profiler"]["output_file"] = (
+            f"dsflops_nlayer{args.num_layers}_worldsize{WORLD_SIZE}_seq{args.seq_length}_mb{args.micro_batch_size}.log"
+        )
+        log.info(
+            f'Deepspeed config updated with out: {json.dumps(ds_config_copy["flops_profiler"], indent=4, sort_keys=True)}'
+        )
 
         # model = model_provider()
         # model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder)
@@ -904,10 +904,10 @@ def main():
             config=args.deepspeed_config_dict,
         )
         model = [model]
-        print_rank_0(get_parameters_in_billions(model))
+        log.info(get_parameters_in_billions(model))
         # Calculate batch size.
         gas = args.deepspeed_config_dict["gradient_accumulation_steps"]
-        # TODO: use latency measurements from 
+        # TODO: use latency measurements from DeepSpeed timer
         batch_size = (
             2  # tokens = torch.cat([tokens_u, tokens_p])
             * gas
@@ -923,7 +923,9 @@ def main():
 
         # ---------- Reference model -------------
         # model_ref, _, _ = setup_model_and_optimizer(model_provider, ModelType.encoder_or_decoder) # throwing assertion error
-        model_ref = get_model(model_provider, ModelType.encoder_or_decoder)  # works but does it load from a checkpoint or randomly initializes?
+        model_ref = get_model(
+            model_provider, ModelType.encoder_or_decoder
+        )  # works but does it load from a checkpoint or randomly initializes?
         # # TRY deepspeed init and load_checkpoint directly here from model_ref = get_model(model_provider)
         # optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
         # opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
@@ -934,7 +936,7 @@ def main():
         #    lr_scheduler=opt_param_scheduler_2,
         #    mpu=mpu if args.no_pipeline_parallel else None,
         #    config=args.deepspeed_config_dict,
-        #)
+        # )
         # optimizer_2 = get_megatron_optimizer(model_ref, None, None, 1.0)
         # opt_param_scheduler_2 = get_optimizer_param_scheduler(optimizer_2)
         # model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
@@ -945,35 +947,38 @@ def main():
         #     mpu=mpu if args.no_pipeline_parallel else None,
         #     config=args.deepspeed_config_dict,
         # )
-        # log.info(80 * "=")
-        # log.info(f"model_ref.tput_timer={model_ref.tput_timer=}")
-        # log.info(80 * "=")
+        log.info(80 * "=")
+        log.info(f"model.tput_timer={model[0].tput_timer=}")
+        log.info(80 * "=")
         # deepspeed initialization of reference model without optimizer
 
         ds_config_ref_dict = args.deepspeed_config_dict.copy()
-        if 'zero_optimization' in ds_config_ref_dict:
-            print_rank_0(f'args.deepspeed_config_dict before: {args.deepspeed_config_dict}')
-            print_rank_0(f'ds_config_ref_dict before: {ds_config_ref_dict}')
-            if 'zero_optimization' in ds_config_ref_dict.keys():
-                del ds_config_ref_dict['zero_optimization']
-            if 'optimizer' in ds_config_ref_dict.keys():
-                del ds_config_ref_dict['optimizer']
-            if 'train_batch_size' in ds_config_ref_dict.keys():
-                del ds_config_ref_dict['train_batch_size']
-            print_rank_0(f'args.deepspeed_config_dict after: {args.deepspeed_config_dict}')
-            print_rank_0(f'ds_config_ref_dict after: {ds_config_ref_dict}')
+        if "zero_optimization" in ds_config_ref_dict:
+            log.info(
+                f"args.deepspeed_config_dict before={json.dumps(args.deepspeed_config_dict, indent=4, sort_keys=True)}"
+            )
+            log.info(f"ds_config_ref_dict before={json.dumps(ds_config_ref_dict, indent=4, sort_keys=True)}")
+            if "zero_optimization" in ds_config_ref_dict.keys():
+                del ds_config_ref_dict["zero_optimization"]
+            if "optimizer" in ds_config_ref_dict.keys():
+                del ds_config_ref_dict["optimizer"]
+            if "train_batch_size" in ds_config_ref_dict.keys():
+                del ds_config_ref_dict["train_batch_size"]
+            log.info(
+                f"args.deepspeed_config_dict after: {json.dumps(args.deepspeed_config_dict, indent=4, sort_keys=True)}"
+            )
+            log.info(f"ds_config_ref_dict after: {json.dumps(ds_config_ref_dict, indent=4, sort_keys=True)}")
 
         model_ref, optimizer_2, _, opt_param_scheduler_2 = deepspeed.initialize(
-            model=model_ref[0],
-            config=ds_config_ref_dict
+            model=model_ref[0], config=ds_config_ref_dict
         )
-        print_rank_0(f'ref optimizer: {optimizer_2}')
-        print_rank_0(f'ref param scheduler: {opt_param_scheduler_2}')
+        log.info(f"ref optimizer: {optimizer_2}")
+        log.info(f"ref param scheduler: {opt_param_scheduler_2}")
         # assert optimizer_2 == None, "Reference model optimizer is not None"
         # assert opt_param_scheduler_2 == None, "Reference param scheduler is not None"
 
         if isinstance(model_ref, deepspeed.PipelineEngine):
-            print(f"Doing assertion checks on model_ref..")
+            log.info("Doing assertion checks on model_ref..")
             # hack to get batch_fn from pretrain_gpt.py
             model_ref.set_batch_fn(model_ref.module._megatron_batch_fn)
 
@@ -1000,19 +1005,19 @@ def main():
         # ----------------------------------------
 
         if args.data_file_list_u is not None:
-            print(f"data files list unpreferred: {args.data_file_list_u}")
+            log.info(f"data files list unpreferred: {args.data_file_list_u}")
 
             # Number of train/valid/test samples.
             if args.train_samples:
-                print(f"args.train_samples: {args.train_samples}")
+                log.info(f"args.train_samples: {args.train_samples}")
                 train_samples = args.train_samples
             else:
-                print(f"args.train_iters: {args.train_iters}")
-                print(f"args.global_batch_size: {args.global_batch_size}")
+                log.info(f"args.train_iters: {args.train_iters}")
+                log.info(f"args.global_batch_size: {args.global_batch_size}")
                 train_samples = args.train_iters * args.global_batch_size
 
-            print(f"args.eval_interval: {args.eval_interval}")
-            print(f"args.eval_iters: {args.eval_iters}")
+            log.info(f"args.eval_interval: {args.eval_interval}")
+            log.info(f"args.eval_iters: {args.eval_iters}")
             eval_iters = (args.train_iters // args.eval_interval + 1) * args.eval_iters
             test_iters = args.eval_iters
             train_val_test_num_samples = [
@@ -1020,7 +1025,7 @@ def main():
                 eval_iters * args.global_batch_size,
                 test_iters * args.global_batch_size,
             ]
-            print_rank_0(f"train_val_test_num_samples: {train_val_test_num_samples}")
+            log.info(f"train_val_test_num_samples: {train_val_test_num_samples}")
             # print(f'args.data_impl: {args.data_impl}')
             # print(f'args.split: {args.split}')
             # print(f'args.seq_length: {args.seq_length}')
@@ -1050,10 +1055,10 @@ def main():
                 test_data_prefix=args.test_data_path,
                 data_cache_path=args.data_cache_path,
             )
-            print_rank_0("> finished creating unpreferred GPT datasets ...")
+            log.info("> finished creating unpreferred GPT datasets ...")
 
         if args.data_file_list_p is not None:
-            print_rank_0(f"data files list preferred: {args.data_file_list_p}")
+            log.info(f"data files list preferred: {args.data_file_list_p}")
 
             files_p = []
             with open(args.data_file_list_p, "r") as flist:
@@ -1075,11 +1080,11 @@ def main():
                 test_data_prefix=args.test_data_path,
                 data_cache_path=args.data_cache_path,
             )
-            print_rank_0("> finished creating preferred GPT datasets ...")
+            log.info("> finished creating preferred GPT datasets ...")
 
         # Data loaders
-        print_rank_0(f"args.consumed_train_samples: {args.consumed_train_samples}")
-        print_rank_0(f"args.dataloader_type: {args.dataloader_type}")
+        log.info(f"args.consumed_train_samples: {args.consumed_train_samples}")
+        log.info(f"args.dataloader_type: {args.dataloader_type}")
         train_dataloader_u = build_pretraining_data_loader(
             train_ds_u, args.consumed_train_samples
         )
@@ -1092,24 +1097,24 @@ def main():
         assert dl_type in ["single", "cyclic"]
 
         if train_dataloader_u is not None:
-            print_rank_0("unpreferred train_dataloader is not None..")
+            log.info("unpreferred train_dataloader is not None..")
             train_data_iterator_u = (
                 iter(train_dataloader_u)
                 if dl_type == "single"
                 else iter(cyclic_iter(train_dataloader_u))
             )
-        print_rank_0("> finished creating unpreferred train_data_iterator...")
+        log.info("> finished creating unpreferred train_data_iterator...")
         if train_dataloader_p is not None:
-            print_rank_0("preferred train_dataloader is not None..")
+            log.info("preferred train_dataloader is not None..")
             train_data_iterator_p = (
                 iter(train_dataloader_p)
                 if dl_type == "single"
                 else iter(cyclic_iter(train_dataloader_p))
             )
-        print_rank_0("> finished creating preferred train_data_iterator...")
+        log.info("> finished creating preferred train_data_iterator...")
 
-        print_rank_0(f"args.train_iters: {args.train_iters}")
-        print_rank_0(f"args.save_interval: {args.save_interval}")
+        log.info(f"args.train_iters: {args.train_iters}")
+        log.info(f"args.save_interval: {args.save_interval}")
         report_memory_flag = True
 
         # Train model
@@ -1141,11 +1146,11 @@ def main():
                         position_ids_u,
                     ) = get_batch(train_data_iterator_u)
                     timers("batch-generator-unpreferred").stop()
-                    # print_rank_0(f'tokens_u[0].size(): {tokens_u[0].size()}')
-                    # print_rank_0(f'tokens_u[0,400:1024]: {tokens_u[0,400:1024]}')
-                    print_rank_0(
-                        "> finished extracting batch of tokens, labels, attn mask etc. for unpref train_data_iterator ..."
-                    )
+                    # log.info(f'tokens_u[0].size(): {tokens_u[0].size()}')
+                    # log.info(f'tokens_u[0,400:1024]: {tokens_u[0,400:1024]}')
+                    # log.info(
+                    #    "> finished extracting batch of tokens, labels, attn mask etc. for unpref train_data_iterator ..."
+                    # )
 
                     timers("batch-generator-preferred", log_level=2).start()
                     (
@@ -1157,9 +1162,9 @@ def main():
                     ) = get_batch(train_data_iterator_p)
                     timers("batch-generator-preferred").stop()
                     # print(f'tokens shape: {tokens_u.shape}')
-                    print_rank_0(
-                        "> finished extracting batch of tokens, labels, attn mask etc. for pref train_data_iterator ..."
-                    )
+                    # log.info(
+                    #     "> finished extracting batch of tokens, labels, attn mask etc. for pref train_data_iterator ..."
+                    # )
 
                     # Model forward with concatenated inputs
                     tokens_c = torch.cat((tokens_p, tokens_u), 0)
@@ -1228,11 +1233,11 @@ def main():
                         "dt_data": _tf0 - _td0,
                         "dt_forward": _tf1 - _tf0,
                         "dt_backward": _tb1 - _tf1,
+                        "update_successful": model[0].was_step_applied(),
                     }
                 _t1 = time.perf_counter()
-                update_successful = model[0].was_step_applied()
-                log.info(f"update_successful: {update_successful}")
-                log.info(f"args.micro_batch_size: {args.micro_batch_size}")
+                # log.info(f"update_successful: {update_successful}")
+                # log.info(f"args.micro_batch_size: {args.micro_batch_size}")
 
                 # Iteration updates
                 iteration += 1
@@ -1270,7 +1275,7 @@ def main():
                 ):
                     TPL = args.tensor_model_parallel_size
                     GRAD_ACC = os.environ.get("GRAD_ACC_STEPS")
-                    print(f"Checkpointing loss and rewards at iteration {i} ..")
+                    log.info(f"Checkpointing loss and rewards at iteration {i} ..")
                     np.savez(
                         f"./runs/loss-rewards_indels_textseq_nranks-{WORLD_SIZE}_model-nlayers-{args.num_layers}_TP-{TPL}_zero-{args.zero_stage}_gradacc-{GRAD_ACC}_lr-{args.lr}_seq-{args.seq_length}_bs-{args.micro_batch_size}_iters-{args.train_iters}-chkpt-{i}.npz",
                         loss=np.array(averaged_loss_iter),
@@ -1311,7 +1316,7 @@ def main():
         # np.savez(f'./runs/proteingym_indels/loss-rewards_iters-{args.train_iters}.npz', loss=np.array(averaged_loss_iter), rewards=np.array(averaged_rewards_iter))
 
         # Generate
-        if False:
+        if True:
             model[0].eval()
             print_rank_0(f"Generation mode..")
             print_rank_0(f"args.seq_length: {args.seq_length}")
@@ -1384,10 +1389,10 @@ def main():
 
             if hasattr(args, "eos_id"):
                 termination_id = args.eos_id
-                print(f"args.eos_id: {args.eos_id}")
+                log.info(f"args.eos_id: {args.eos_id}")
             else:
                 termination_id = tokenizer.eod
-                print(f"tokenizer.eod: {tokenizer.eod}")
+                log.info(f"tokenizer.eod: {tokenizer.eod}")
 
             # Log probability of the sequence (prompt + generated tokens).
             output_log_probs = None
@@ -1748,7 +1753,7 @@ if __name__ == "__main__":
 
     dist.log_summary()
     if wandb.run is not None:
-        print(f"wandb.run.name: {wandb.run.name}")
-        print(f"wandb.run.url: {wandb.run.url}")
+        log.info(f"wandb.run.name: {wandb.run.name}")
+        log.info(f"wandb.run.url: {wandb.run.url}")
         wandb.finish()
     sys.exit()
