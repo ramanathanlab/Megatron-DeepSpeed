@@ -1,16 +1,5 @@
 #!/bin/bash --login
 
-install_deepspeed() {
-    _deepspeed_dir="${PBS_O_WORKDIR}/deps/DeepSpeed"
-    if [[ ! -d "${_deepspeed_dir}" ]]; then
-        mkdir $(dirname "${_deepspeed_dir}")
-        git clone https://github.com/microsoft/DeepSpeed "${_deepspeed_dir}"
-        cd "${_deepspeed_dir}"
-        bash install.sh |& tee install.log
-        cd -
-    fi
-}
-
 export MODEL_SIZE="3p5B"
 
 export PP=1
@@ -46,6 +35,9 @@ cd "${PBS_O_WORKDIR}" || exit
 # export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
 ###############################################
 
+module use /home/jmitche1/anl_release/aurora/2024/q3
+module load frameworks_2024_8.lua
+
 export CCL_KVS_MODE=mpi # ?? missing from canvas
 
 export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
@@ -78,16 +70,9 @@ fi
 ezpz_setup_alcf "$@" |& tee --append "${LOGFILE}" || exit
 #################################################################
 
-# [deepspeed] ############################
-if [[ -z $(command -v deepspeed) ]]; then
-    install_deepspeed || exit
-fi
-##########################################
-#
-
 export WORLD_SIZE="${NGPUS}"
 run_cmd="${DIST_LAUNCH} --pmi=pmix \
-  python3 dpo_training.py \
+  python3 -Wignore dpo_training.py \
   --seq-length ${SEQ_LEN} \
   --save ${CHECKPOINT_DIR} \
   --load ${CHECKPOINT_DIR} \
@@ -124,7 +109,7 @@ run_cmd="${DIST_LAUNCH} --pmi=pmix \
   --eval-interval 50000 \
   --data-file-list-p ALCF/data_p.txt \
   --data-file-list-u ALCF/data_u.txt \
-  --data-cache-path ./index-cache \
+  --data-cache-path ${CHECKPOINT_DIR}/index-cache \
   --tokenizer-model ALCF/tokenizer.model \
   --no-query-key-layer-scaling \
   --use-rotary-position-embeddings \
